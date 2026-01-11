@@ -48,14 +48,13 @@ export type Task = {
   history: HistoryLog[];
 };
 
+// Tambahkan "hq" di deretan ini
 export type Tab =
   | "my"
   | "timeline"
   | "calendar"
-  | "hq"
   | "all"
   | "overdue"
   | "performance"
-  | "requests";
-
-
+  | "requests"
+  | "hq";

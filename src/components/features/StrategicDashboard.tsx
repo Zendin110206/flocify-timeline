@@ -27,6 +27,7 @@ const clamp = (value: number, min = 0, max = 1) =>
 export function StrategicDashboard({ tasks }: StrategicDashboardProps) {
   const today = todayISO();
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const marketTask = useMemo(
     () =>
       tasks.find(

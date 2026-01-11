@@ -24,7 +24,7 @@ export function TabNavigation({
     { id: "my", label: "My Tasks" },
     { id: "timeline", label: "Timeline" },
     { id: "calendar", label: "Calendar" },
-    ...(FEATURE_FLAGS.hq ? [{ id: "hq", label: "HQ", icon: Building2 }] : []),
+    ...(FEATURE_FLAGS.hq ? [{ id: "hq" as Tab, label: "HQ", icon: Building2 }] : []),
     { id: "all", label: "All Tasks" },
     {
       id: "overdue",
