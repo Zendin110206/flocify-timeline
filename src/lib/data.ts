@@ -206,4 +206,45 @@ export const INITIAL_TASKS: Task[] = [
   },
 ];
 
+export const HQ_METRICS = {
+  marketValidationTarget: 15,
+  transactionGoal: 300,
+  transactionCurrent: 0,
+  somTarget: 500000000,
+  somCurrent: 0,
+  platformFeePercent: 7,
+  burnDeadline: "2026-01-15",
+  burnMonthly: {
+    server: 500000,
+    marketing: 1500000,
+  },
+  burnWindowDays: 30,
+  riskWindowDays: 2,
+};
+
+export const HQ_PILLARS = [
+  {
+    id: "escrow",
+    label: "Escrow Safety",
+    divisions: ["Web"],
+    keywords: ["escrow", "rekening", "payment", "order id", "ktp", "bank"],
+  },
+  {
+    id: "logistics",
+    label: "Automated Logistics",
+    divisions: ["Komunitas"],
+    keywords: ["logistik", "logistic", "kurir", "pickup", "karantina"],
+  },
+  {
+    id: "global",
+    label: "Global Market",
+    divisions: ["Branding", "Konten"],
+    keywords: ["market", "branding", "konten", "community", "komunitas"],
+  },
+];
+
+export const FEATURE_FLAGS = {
+  hq: false,
+};
+
 

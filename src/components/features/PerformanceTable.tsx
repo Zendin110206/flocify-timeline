@@ -1,5 +1,6 @@
 // src/components/features/PerformanceTable.tsx
 import React, { useState } from "react";
+import { cn } from "@/lib/utils";
 import { Task } from "@/lib/types";
 import {
   Trophy,
@@ -15,7 +16,7 @@ import {
   X,
   Printer,
 } from "lucide-react";
-import { ADMINS } from "@/lib/data";
+import { ADMINS, PEOPLE } from "@/lib/data";
 
 interface PerformanceTableProps {
   tasks: Task[];
@@ -36,15 +37,29 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
   const isAdmin = ADMINS.includes(currentUser);
 
   // 1. OLAH DATA (Kalkulasi Statistik Real-Time)
-  const allMembers = Array.from(new Set(tasks.map((t) => t.pic)));
-
+  const allMembers = PEOPLE;
+  // --- UPDATE LOGIKA STATS (GANTI BAGIAN INI) ---
   const stats = allMembers.map((member) => {
     const memberTasks = tasks.filter((t) => t.pic === member);
     const total = memberTasks.length;
     const done = memberTasks.filter((t) => t.status === "done").length;
 
-    // 🔥 FIX: Hitung Strike dari Database + Tugas yang SEDANG TELAT sekarang
-    // Jadi kalau di tab Overdue muncul, di sini otomatis terhitung telat juga.
+    // Perhitungan Workload Aktif (Bukan Done)
+    const activeTasks = memberTasks.filter((t) => t.status !== "done");
+    const activeCount = activeTasks.length;
+    const highPriorityActive = activeTasks.filter(
+      (t) => t.priority === "high"
+    ).length;
+
+    // Aturan Workload (Sesuai Codex Logic)
+    const isOverloaded = highPriorityActive > 3 || activeCount > 5;
+    const isIdle = activeCount === 0;
+    const workloadStatus = isOverloaded
+      ? "overloaded"
+      : isIdle
+      ? "idle"
+      : "steady";
+
     const historicalStrikes = memberTasks.reduce(
       (acc, curr) => acc + (curr.strikes || 0),
       0
@@ -52,19 +67,11 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
     const activeOverdue = memberTasks.filter(
       (t) => t.status !== "done" && t.due < today
     ).length;
-
-    // Total Masalah = Strike Lama + Yang Sedang Telat
-    // (Note: Kita pakai Math.max biar gak double count kalau sistem auto-strike udah jalan)
     const totalIssues = Math.max(historicalStrikes, activeOverdue);
 
-    // Kalkulasi Persentase (Efficiency)
     const efficiency = total === 0 ? 0 : Math.round((done / total) * 100);
-
-    // Rumus Skor KPI
-    // Skor bisa minus kalau banyak masalah!
     const score = Math.round(done * 10 - totalIssues * 15 + efficiency / 2);
 
-    // --- LOGIC WARNA STATUS ---
     let status = "N/A";
     let statusColor = "";
 
@@ -95,6 +102,9 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
       score,
       status,
       statusColor,
+      workloadStatus, // Data baru
+      activeCount, // Data baru
+      highPriorityActive, // Data baru
     };
   });
 
@@ -221,22 +231,28 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
           <table className="w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
               <tr>
+                <th className="px-6 py-4 font-bold text-center">Rank</th>
                 <th className="px-6 py-4 font-bold">Member</th>
                 <th className="px-6 py-4 font-bold text-center">
                   Productivity
                 </th>
+                <th className="px-6 py-4 font-bold text-center">Points</th>
                 <th className="px-6 py-4 font-bold text-center">Discipline</th>
                 <th className="px-6 py-4 font-bold text-center">Status</th>
                 <th className="px-6 py-4 font-bold text-center">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {sortedStats.map((stat) => (
+              {sortedStats.map((stat, index) => (
                 <tr
                   key={stat.member}
                   className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
                 >
-                  {/* Member */}
+                  <td className="px-6 py-4 text-center">
+                    <span className="text-xs font-black text-slate-400">
+                      #{index + 1}
+                    </span>
+                  </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
@@ -247,47 +263,71 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                       </span>
                     </div>
                   </td>
-                  {/* Productivity */}
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-2 w-24 bg-slate-100 rounded-full overflow-hidden dark:bg-slate-800">
+                    <div className="flex items-center gap-3 justify-center">
+                      <div className="flex-1 h-2 w-20 bg-slate-100 rounded-full overflow-hidden dark:bg-slate-800 max-w-20">
                         <div
-                          className={`h-full rounded-full ${
+                          className={cn(
+                            "h-full rounded-full",
                             stat.efficiency >= 80
                               ? "bg-emerald-500"
                               : stat.efficiency >= 50
                               ? "bg-blue-500"
                               : "bg-amber-500"
-                          }`}
+                          )}
                           style={{ width: `${stat.efficiency}%` }}
                         />
                       </div>
-                      <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
                         {stat.done}/{stat.total}
                       </span>
                     </div>
                   </td>
-                  {/* Discipline (REAL TIME UPDATE) */}
+                  <td className="px-6 py-4 text-center">
+                    <div className="inline-flex items-center gap-1 font-black text-sm">
+                      <TrendingUp
+                        size={14}
+                        className={
+                          stat.score < 0 ? "text-rose-500" : "text-indigo-500"
+                        }
+                      />
+                      <span
+                        className={
+                          stat.score < 0
+                            ? "text-rose-600"
+                            : "text-indigo-600 dark:text-indigo-400"
+                        }
+                      >
+                        {stat.score}
+                      </span>
+                    </div>
+                  </td>
                   <td className="px-6 py-4 text-center">
                     {stat.totalIssues === 0 ? (
-                      <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
-                        <ShieldCheck size={14} /> Clean
+                      <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                        <ShieldCheck size={12} /> CLEAN
                       </div>
                     ) : (
-                      <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400 animate-pulse">
-                        <AlertOctagon size={14} /> {stat.totalIssues} Late
+                      <div className="flex flex-col items-center gap-1">
+                        <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
+                          <AlertOctagon size={12} /> {stat.totalIssues} LATE
+                        </div>
+                        <span className="text-[9px] text-slate-400 italic">
+                          Historical Strikes
+                        </span>
                       </div>
                     )}
                   </td>
-                  {/* Status */}
                   <td className="px-6 py-4 text-center">
                     <span
-                      className={`inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${stat.statusColor}`}
+                      className={cn(
+                        "inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                        stat.statusColor
+                      )}
                     >
                       {stat.status}
                     </span>
                   </td>
-                  {/* Action SP */}
                   <td className="px-6 py-4 text-center">
                     {isAdmin && stat.totalIssues > 0 ? (
                       <button
@@ -297,9 +337,10 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                             count: stat.totalIssues,
                           })
                         }
-                        className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 shadow-sm hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50"
+                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-900/20"
+                        title="Issue Warning Letter"
                       >
-                        <Gavel size={14} /> Issue SP
+                        <Gavel size={16} />
                       </button>
                     ) : (
                       <span className="text-slate-300 dark:text-slate-700">
@@ -316,6 +357,91 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
               Belum ada data untuk dianalisis.
             </div>
           )}
+        </div>
+      </div>
+
+      {/* --- SECTION 3: REAL-TIME TEAM CAPACITY (WORKLOAD) --- */}
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:border-slate-800 dark:bg-slate-900">
+        <div className="border-b border-slate-100 px-6 py-5 dark:border-slate-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              <ShieldCheck className="text-indigo-500" size={20} />
+              Team Availability Heatmap
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Kapasitas beban kerja anggota berdasarkan tugas aktif saat ini.
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {stats.map((s) => (
+            <div
+              key={s.member}
+              className={cn(
+                "p-4 rounded-xl border transition-all",
+                s.workloadStatus === "overloaded"
+                  ? "bg-rose-50/50 border-rose-100 dark:bg-rose-900/10 dark:border-rose-900/30"
+                  : s.workloadStatus === "idle"
+                  ? "bg-emerald-50/50 border-emerald-100 dark:bg-emerald-900/10 dark:border-emerald-900/30"
+                  : "bg-slate-50 border-slate-100 dark:bg-slate-800/50 dark:border-slate-700"
+              )}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-bold text-slate-800 dark:text-slate-100">
+                  {s.member}
+                </span>
+                <span
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider",
+                    s.workloadStatus === "overloaded"
+                      ? "text-rose-600 dark:text-rose-400"
+                      : s.workloadStatus === "idle"
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-amber-600 dark:text-amber-400"
+                  )}
+                >
+                  {s.workloadStatus}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>Task Load</span>
+                  <span>{s.activeCount} / 5 Tasks</span>
+                </div>
+                <div className="h-1.5 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full transition-all duration-500",
+                      s.workloadStatus === "overloaded"
+                        ? "bg-rose-500"
+                        : s.workloadStatus === "idle"
+                        ? "bg-emerald-500"
+                        : "bg-amber-500"
+                    )}
+                    style={{
+                      width: `${Math.min((s.activeCount / 5) * 100, 100)}%`,
+                    }}
+                  />
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <div
+                    className={cn(
+                      "h-2 w-2 rounded-full",
+                      s.highPriorityActive > 0
+                        ? "bg-rose-500 animate-pulse"
+                        : "bg-slate-300"
+                    )}
+                  />
+                  <span className="text-[10px] text-slate-500">
+                    {s.highPriorityActive} High Priority Task
+                    {s.highPriorityActive > 1 ? "s" : ""}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -499,5 +625,3 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
     </div>
   );
 }
-
-

@@ -5,7 +5,12 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Task, Tab, Division, TaskStatus, AppNotification } from "@/lib/types";
 import { todayISO, daysBetween, STATUS_CONFIG } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
-import { INITIAL_TASKS, INITIAL_NOTIFICATIONS, SUPER_ADMIN } from "@/lib/data";
+import {
+  FEATURE_FLAGS,
+  INITIAL_TASKS,
+  INITIAL_NOTIFICATIONS,
+  SUPER_ADMIN,
+} from "@/lib/data";
 
 import { Navbar } from "@/components/layout/Navbar";
 import { LoginPage } from "@/components/layout/LoginPage";
@@ -16,6 +21,7 @@ import { TaskFilters } from "@/components/features/TaskFilters";
 import { TimelineView } from "@/components/features/TimelineView";
 import { GanttView } from "@/components/features/GanttView";
 import { PerformanceTable } from "@/components/features/PerformanceTable";
+import { StrategicDashboard } from "@/components/features/StrategicDashboard";
 import { RequestInbox, RequestItem } from "@/components/features/RequestInbox";
 import { TaskForm } from "@/components/features/TaskForm";
 import { useDialog } from "@/components/ui/DialogProvider";
@@ -43,6 +49,13 @@ const extractTaskTag = (message: string) => {
 const stripTaskTag = (message: string) =>
   message.replace(TASK_TAG_REGEX, "").trim();
 const buildTaskTag = (taskId: string) => `[task:${taskId}]`;
+const isSameLocalDay = (timestamp: string, dayISO: string) => {
+  const date = new Date(timestamp);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}` === dayISO;
+};
 
 export default function FlocifyDashboard() {
   const dialog = useDialog();
@@ -62,7 +75,11 @@ export default function FlocifyDashboard() {
   const today = todayISO();
   const isSuperAdmin = me === SUPER_ADMIN;
   const effectiveTab =
-    !isSuperAdmin && activeTab === "requests" ? "my" : activeTab;
+    activeTab === "hq" && !FEATURE_FLAGS.hq
+      ? "my"
+      : !isSuperAdmin && activeTab === "requests"
+      ? "my"
+      : activeTab;
 
   const pendingRequests = useMemo<RequestItem[]>(() => {
     const items: RequestItem[] = [];
@@ -101,8 +118,7 @@ export default function FlocifyDashboard() {
     });
     return items.sort(
       (a, b) =>
-        new Date(b.requestedAt).getTime() -
-        new Date(a.requestedAt).getTime()
+        new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
     );
   }, [tasks]);
 
@@ -124,6 +140,7 @@ export default function FlocifyDashboard() {
   }, [notifications, tasks]);
 
   const handleTabChange = (tab: Tab) => {
+    if (tab === "hq" && !FEATURE_FLAGS.hq) return;
     if (tab === "requests" && !isSuperAdmin) return;
     setActiveTab(tab);
   };
@@ -139,7 +156,8 @@ export default function FlocifyDashboard() {
             t.status !== "done" &&
             daysBetween(t.due, today) > 0 &&
             !t.history?.some(
-              (h) => h.action === "Auto-Strike" && h.timestamp.startsWith(today)
+              (h) =>
+                h.action === "Auto-Strike" && isSameLocalDay(h.timestamp, today)
             )
         );
       if (!needsCheck) return;
@@ -152,7 +170,8 @@ export default function FlocifyDashboard() {
       for (const t of currentTasks) {
         if (t.status !== "done" && daysBetween(t.due, today) > 0) {
           const alreadyStriked = t.history?.some(
-            (h) => h.action === "Auto-Strike" && h.timestamp.startsWith(today)
+            (h) =>
+              h.action === "Auto-Strike" && isSameLocalDay(h.timestamp, today)
           );
           if (!alreadyStriked) {
             strikeCount++;
@@ -631,9 +650,7 @@ export default function FlocifyDashboard() {
   };
 
   const handleClearNotifs = async () => {
-    setNotifications((prev) =>
-      prev.filter((n) => n.userId !== me)
-    );
+    setNotifications((prev) => prev.filter((n) => n.userId !== me));
     const { error: clearError } = await supabase
       .from("notifications")
       .delete()
@@ -738,6 +755,9 @@ export default function FlocifyDashboard() {
         {effectiveTab === "calendar" && (
           <GanttView tasks={filteredTasks} today={today} />
         )}
+        {FEATURE_FLAGS.hq && effectiveTab === "hq" && (
+          <StrategicDashboard tasks={tasks} />
+        )}
         {effectiveTab === "all" && (
           <TaskList
             tasks={filteredTasks}
@@ -776,11 +796,10 @@ export default function FlocifyDashboard() {
             onSave={handleSaveTask}
             onCancel={handleCloseModal}
             defaultOwner={me}
+            tasks={tasks}
           />
         </Modal>
       )}
     </div>
   );
 }
-
-

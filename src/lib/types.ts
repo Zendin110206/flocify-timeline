@@ -52,6 +52,7 @@ export type Tab =
   | "my"
   | "timeline"
   | "calendar"
+  | "hq"
   | "all"
   | "overdue"
   | "performance"

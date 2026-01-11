@@ -1,5 +1,7 @@
 // src/components/layout/TabNavigation.tsx
 import React from "react";
+import { Building2 } from "lucide-react";
+import { FEATURE_FLAGS } from "@/lib/data";
 import { Tab } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +20,11 @@ export function TabNavigation({
   requestCount = 0,
   showRequests = false,
 }: TabNavigationProps) {
-  const tabs: { id: Tab; label: string }[] = [
+  const tabs: { id: Tab; label: string; icon?: React.ElementType }[] = [
     { id: "my", label: "My Tasks" },
     { id: "timeline", label: "Timeline" },
     { id: "calendar", label: "Calendar" },
+    ...(FEATURE_FLAGS.hq ? [{ id: "hq", label: "HQ", icon: Building2 }] : []),
     { id: "all", label: "All Tasks" },
     {
       id: "overdue",
@@ -44,7 +47,7 @@ export function TabNavigation({
             key={tab.id}
             onClick={() => onChange(tab.id)}
             className={cn(
-              "whitespace-nowrap border-b-2 py-3 text-sm font-medium transition-colors",
+              "flex items-center gap-2 whitespace-nowrap border-b-2 py-3 text-sm font-medium transition-colors",
               activeTab === tab.id
                 ? "border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400"
                 : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:border-slate-700 dark:hover:text-slate-200",
@@ -56,7 +59,8 @@ export function TabNavigation({
                 "text-amber-600 dark:text-amber-400"
             )}
           >
-            {tab.label}
+            {tab.icon && <tab.icon size={14} />}
+            <span>{tab.label}</span>
           </button>
         ))}
       </div>

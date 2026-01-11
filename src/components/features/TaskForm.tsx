@@ -1,5 +1,5 @@
 // src/components/features/TaskForm.tsx
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   Task,
   Division,
@@ -27,6 +27,7 @@ interface TaskFormProps {
   onSave: (task: Task) => void;
   onCancel: () => void;
   defaultOwner: string;
+  tasks?: Task[];
 }
 
 export function TaskForm({
@@ -34,6 +35,7 @@ export function TaskForm({
   onSave,
   onCancel,
   defaultOwner,
+  tasks = [],
 }: TaskFormProps) {
   const dialog = useDialog();
   const currentUser = defaultOwner;
@@ -54,6 +56,19 @@ export function TaskForm({
   const canEditStart = isSuperAdmin || isAdmin || isPic;
   const canEditDeadline = isSuperAdmin || !initialData;
   const isReadOnly = !canEditAny && !!initialData;
+
+  type WorkloadStatus = "overloaded" | "steady" | "idle";
+  const WORKLOAD_RULES = { maxHighPriority: 3, maxActive: 5 };
+  const WORKLOAD_LABEL: Record<WorkloadStatus, string> = {
+    overloaded: "Overloaded",
+    steady: "Steady",
+    idle: "Idle",
+  };
+  const WORKLOAD_DOT: Record<WorkloadStatus, string> = {
+    overloaded: "🔴",
+    steady: "🟡",
+    idle: "🟢",
+  };
 
   const [activeTab, setActiveTab] = useState<"detail" | "history">("detail");
   const [reason, setReason] = useState("");
@@ -84,6 +99,37 @@ export function TaskForm({
   const canMarkDone = isChecklistComplete || isSuperAdmin;
   const isMarkingDone =
     formData.status === "done" && initialData?.status !== "done";
+
+  const workloadByPerson = useMemo(() => {
+    const map: Record<
+      string,
+      { activeCount: number; highPriorityCount: number; status: WorkloadStatus }
+    > = {};
+    const activeTasks = tasks.filter(
+      (task) =>
+        task.status !== "done" && (!initialData || task.id !== initialData.id)
+    );
+    PEOPLE.forEach((person) => {
+      const myTasks = activeTasks.filter((task) => task.pic === person);
+      const activeCount = myTasks.length;
+      const highPriorityCount = myTasks.filter(
+        (task) => task.priority === "high"
+      ).length;
+      const status: WorkloadStatus =
+        highPriorityCount > WORKLOAD_RULES.maxHighPriority ||
+        activeCount > WORKLOAD_RULES.maxActive
+          ? "overloaded"
+          : activeCount === 0
+          ? "idle"
+          : "steady";
+      map[person] = { activeCount, highPriorityCount, status };
+    });
+    return map;
+  }, [tasks, initialData, WORKLOAD_RULES.maxHighPriority, WORKLOAD_RULES.maxActive]);
+
+  const selectedWorkload = formData.pic
+    ? workloadByPerson[formData.pic]
+    : undefined;
 
   const toggleMember = (person: string) => {
     if (!canEditMembers) return;
@@ -328,12 +374,33 @@ export function TaskForm({
                 }
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-900 dark:border-slate-600 dark:text-white disabled:opacity-50"
               >
-                {PEOPLE.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
+                {PEOPLE.map((person) => {
+                  const workload = workloadByPerson[person];
+                  const label = workload
+                    ? `${WORKLOAD_DOT[workload.status]} ${person} (${WORKLOAD_LABEL[workload.status]})`
+                    : person;
+                  return (
+                    <option key={person} value={person}>
+                      {label}
+                    </option>
+                  );
+                })}
               </select>
+              <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+                <p>
+                  Overloaded: &gt;{WORKLOAD_RULES.maxHighPriority} high atau
+                  &gt;{WORKLOAD_RULES.maxActive} tugas aktif.
+                </p>
+                {selectedWorkload && (
+                  <p>
+                    Beban {formData.pic}: {selectedWorkload.activeCount} aktif •{" "}
+                    {selectedWorkload.highPriorityCount} high priority.
+                  </p>
+                )}
+                {initialData && (
+                  <p>Indikator tidak menghitung tugas yang sedang diedit.</p>
+                )}
+              </div>
             </div>
 
             <div>
