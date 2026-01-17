@@ -125,7 +125,8 @@ export function useTaskData() {
         output: t.output || "",
         strikes: t.strikes || 0,
         subtasks: t.subtasks || [],
-        history: t.history || [],
+          history: t.history || [],
+        finished_at: t.finished_at,
       }));
       setTasks(mappedTasks);
       // Jalankan razia setelah data terambil

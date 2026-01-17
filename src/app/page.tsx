@@ -352,6 +352,23 @@ export default function FlocifyDashboard() {
   };
 
   const handleSaveTask = async (task: Task) => {
+    // LOGIKA BARU: Tentukan finished_at saat Simpan/Edit
+    // Kalau statusnya 'done', kita butuh timestamp.
+    // Kalau task sudah ada (edit) dan statusnya gak berubah, pertahankan finished_at lama.
+    // Kalau task baru atau status berubah jadi done, pakai jam sekarang.
+
+    let finishedAt = task.finished_at; // Default: pakai data lama
+
+    if (task.status === "done") {
+      // Kalau data lama belum ada finished_at, atau ini tugas baru, set jam sekarang
+      if (!finishedAt) {
+        finishedAt = getTimestamp();
+      }
+    } else {
+      // Kalau status bukan done (misal dibalikin ke doing), hapus finished_at
+      finishedAt = null;
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const dbPayload: any = {
       id: task.id,
@@ -367,6 +384,7 @@ export default function FlocifyDashboard() {
       strikes: task.strikes,
       subtasks: task.subtasks,
       history: task.history,
+      finished_at: finishedAt, // <--- PENTING: Kirim ini ke database!
     };
 
     if (editingTask) {
