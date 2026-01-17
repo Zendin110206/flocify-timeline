@@ -1,7 +1,5 @@
 // src/components/layout/TabNavigation.tsx
 import React from "react";
-import { Building2 } from "lucide-react";
-import { FEATURE_FLAGS } from "@/lib/data";
 import { Tab } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -24,7 +22,6 @@ export function TabNavigation({
     { id: "my", label: "My Tasks" },
     { id: "timeline", label: "Timeline" },
     { id: "calendar", label: "Calendar" },
-    ...(FEATURE_FLAGS.hq ? [{ id: "hq" as Tab, label: "HQ", icon: Building2 }] : []),
     { id: "all", label: "All Tasks" },
     {
       id: "overdue",
@@ -67,5 +64,4 @@ export function TabNavigation({
     </div>
   );
 }
-
 

@@ -1,17 +1,16 @@
 // src/app/page.tsx
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Task, Tab, Division, TaskStatus, AppNotification } from "@/lib/types";
+import React, { useState, useEffect, useMemo } from "react";
+import { Task, Tab, Division, TaskStatus } from "@/lib/types";
 import { todayISO, daysBetween, STATUS_CONFIG } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
-import {
-  FEATURE_FLAGS,
-  INITIAL_TASKS,
-  INITIAL_NOTIFICATIONS,
-  SUPER_ADMIN,
-} from "@/lib/data";
+import { INITIAL_TASKS, INITIAL_NOTIFICATIONS, SUPER_ADMIN } from "@/lib/data";
 
+// Hooks Baru
+import { useTaskData } from "@/hooks/useTaskData";
+
+// Components
 import { Navbar } from "@/components/layout/Navbar";
 import { LoginPage } from "@/components/layout/LoginPage";
 import { TabNavigation } from "@/components/layout/TabNavigation";
@@ -21,11 +20,11 @@ import { TaskFilters } from "@/components/features/TaskFilters";
 import { TimelineView } from "@/components/features/TimelineView";
 import { GanttView } from "@/components/features/GanttView";
 import { PerformanceTable } from "@/components/features/PerformanceTable";
-import { StrategicDashboard } from "@/components/features/StrategicDashboard";
 import { RequestInbox, RequestItem } from "@/components/features/RequestInbox";
 import { TaskForm } from "@/components/features/TaskForm";
 import { useDialog } from "@/components/ui/DialogProvider";
 
+// Helpers Sederhana
 const generateId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 const getTimestamp = () => new Date().toISOString();
@@ -49,22 +48,23 @@ const extractTaskTag = (message: string) => {
 const stripTaskTag = (message: string) =>
   message.replace(TASK_TAG_REGEX, "").trim();
 const buildTaskTag = (taskId: string) => `[task:${taskId}]`;
-const isSameLocalDay = (timestamp: string, dayISO: string) => {
-  const date = new Date(timestamp);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}` === dayISO;
-};
 
 export default function FlocifyDashboard() {
   const dialog = useDialog();
-  const [isLoading, setIsLoading] = useState(true);
+
+  // --- PANGGIL HOOK BARU DISINI ---
+  // Semua data tasks & notif sekarang diurus otomatis oleh hook ini
+  const {
+    tasks,
+    setTasks,
+    notifications,
+    setNotifications,
+    isLoading,
+    refreshData,
+  } = useTaskData();
+
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [me, setMe] = useState("");
-
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [activeTab, setActiveTab] = useState<Tab>("my");
   const [searchQuery, setSearchQuery] = useState("");
@@ -75,22 +75,31 @@ export default function FlocifyDashboard() {
   const today = todayISO();
   const isSuperAdmin = me === SUPER_ADMIN;
   const effectiveTab =
-    activeTab === "hq" && !FEATURE_FLAGS.hq
-      ? "my"
-      : !isSuperAdmin && activeTab === "requests"
-      ? "my"
-      : activeTab;
+    !isSuperAdmin && activeTab === "requests" ? "my" : activeTab;
 
+  // --- LOGIKA AUTH SEDERHANA ---
+  useEffect(() => {
+    const savedUser = localStorage.getItem("flocify-user");
+    if (savedUser) {
+      // Tambahkan setTimeout agar tidak dianggap synchronous
+      setTimeout(() => {
+        setMe(savedUser);
+        setIsLoggedIn(true);
+      }, 0);
+    }
+  }, []);
+
+  // --- LOGIKA REQUEST INBOX ---
   const pendingRequests = useMemo<RequestItem[]>(() => {
     const items: RequestItem[] = [];
     tasks.forEach((task) => {
       if (!task.history || task.history.length === 0) return;
       const sorted = [...task.history].sort(
         (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       );
       const latestRequest = sorted.find(
-        (log) => log.action === "Deadline Request"
+        (log) => log.action === "Deadline Request",
       );
       if (!latestRequest) return;
       const requestTime = new Date(latestRequest.timestamp).getTime();
@@ -98,7 +107,7 @@ export default function FlocifyDashboard() {
         (log) =>
           (log.action === "Deadline Approved" ||
             log.action === "Deadline Rejected") &&
-          new Date(log.timestamp).getTime() > requestTime
+          new Date(log.timestamp).getTime() > requestTime,
       );
       if (decision) return;
 
@@ -118,10 +127,11 @@ export default function FlocifyDashboard() {
     });
     return items.sort(
       (a, b) =>
-        new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
+        new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime(),
     );
   }, [tasks]);
 
+  // --- LOGIKA LINK NOTIFIKASI ---
   const linkedNotifications = useMemo(() => {
     return notifications.map((notif) => {
       const taggedId = extractTaskTag(notif.message);
@@ -140,159 +150,11 @@ export default function FlocifyDashboard() {
   }, [notifications, tasks]);
 
   const handleTabChange = (tab: Tab) => {
-    if (tab === "hq" && !FEATURE_FLAGS.hq) return;
     if (tab === "requests" && !isSuperAdmin) return;
     setActiveTab(tab);
   };
 
-  // --- LOGIC ---
-  const checkAutoStrike = useCallback(
-    async (currentTasks: Task[]) => {
-      const lastCheck = localStorage.getItem("flocify-last-check");
-      const needsCheck =
-        lastCheck !== today ||
-        currentTasks.some(
-          (t) =>
-            t.status !== "done" &&
-            daysBetween(t.due, today) > 0 &&
-            !t.history?.some(
-              (h) =>
-                h.action === "Auto-Strike" && isSameLocalDay(h.timestamp, today)
-            )
-        );
-      if (!needsCheck) return;
-
-      console.log("👮‍♂️ Razia Database...");
-      let strikeCount = 0;
-      let strikeErrors = 0;
-      let updatedTasks = currentTasks;
-
-      for (const t of currentTasks) {
-        if (t.status !== "done" && daysBetween(t.due, today) > 0) {
-          const alreadyStriked = t.history?.some(
-            (h) =>
-              h.action === "Auto-Strike" && isSameLocalDay(h.timestamp, today)
-          );
-          if (!alreadyStriked) {
-            strikeCount++;
-            const newHistory = [
-              ...(t.history || []),
-              {
-                id: generateId("h-strike"),
-                user: "SYSTEM",
-                action: "Auto-Strike",
-                detail: `Telat ${daysBetween(t.due, today)} hari. Strike +1.`,
-                timestamp: getTimestamp(),
-              },
-            ];
-            const updatedTask: Task = {
-              ...t,
-              strikes: (t.strikes || 0) + 1,
-              history: newHistory,
-            };
-            updatedTasks = updatedTasks.map((task) =>
-              task.id === t.id ? updatedTask : task
-            );
-
-            const { error: updateError } = await supabase
-              .from("tasks")
-              .update({ strikes: updatedTask.strikes, history: newHistory })
-              .eq("id", t.id);
-            if (updateError) {
-              strikeErrors += 1;
-              continue;
-            }
-            const { error: notifError } = await supabase
-              .from("notifications")
-              .insert({
-                id: generateId("n"),
-                user_id: t.pic,
-                message: `⚠️ STRIKE! Tugas "${t.title}" telat. ${buildTaskTag(
-                  t.id
-                )}`,
-                type: "danger",
-                is_read: false,
-                timestamp: getTimestamp(),
-              });
-            if (notifError) strikeErrors += 1;
-          }
-        }
-      }
-      if (strikeCount > 0) {
-        void dialog.alert({
-          title: "System Alert",
-          message: `${strikeCount} tugas telat hari ini.`,
-          tone: "danger",
-        });
-      }
-      if (strikeCount > 0) setTasks(updatedTasks);
-      if (strikeErrors > 0) {
-        await dialog.alert({
-          title: "Sinkronisasi Gagal",
-          message:
-            "Sebagian data strike gagal tersimpan. Coba refresh atau ulangi.",
-          tone: "danger",
-        });
-      }
-      localStorage.setItem("flocify-last-check", today);
-    },
-    [today, setTasks, dialog]
-  );
-
-  const fetchFromDatabase = useCallback(async () => {
-    const { data: dbTasks } = await supabase.from("tasks").select("*");
-    if (dbTasks) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mappedTasks: Task[] = dbTasks.map((t: any) => ({
-        id: t.id,
-        title: t.title,
-        division: t.division,
-        pic: t.pic,
-        members: t.members || [],
-        priority: t.priority,
-        start: t.start_date,
-        due: t.due_date,
-        status: t.status,
-        output: t.output || "",
-        strikes: t.strikes || 0,
-        subtasks: t.subtasks || [],
-        history: t.history || [],
-      }));
-      setTasks(mappedTasks);
-      checkAutoStrike(mappedTasks);
-    }
-    const { data: dbNotifs } = await supabase
-      .from("notifications")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (dbNotifs) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mappedNotifs: AppNotification[] = dbNotifs.map((n: any) => ({
-        id: n.id,
-        userId: n.user_id,
-        message: n.message,
-        type: n.type,
-        isRead: n.is_read,
-        timestamp: n.timestamp,
-      }));
-      setNotifications(mappedNotifs);
-    }
-  }, [checkAutoStrike]);
-
-  useEffect(() => {
-    const initApp = async () => {
-      const savedUser = localStorage.getItem("flocify-user");
-      if (savedUser) {
-        setMe(savedUser);
-        setIsLoggedIn(true);
-      }
-      await fetchFromDatabase();
-      setIsLoading(false);
-    };
-    initApp();
-  }, [fetchFromDatabase]);
-
-  // --- FITUR BARU: TUTUP BUKU MINGGUAN ---
+  // --- FITUR: TUTUP BUKU MINGGUAN ---
   const handleCloseSprint = async () => {
     const doneTasks = tasks.filter((t) => t.status === "done");
     if (doneTasks.length === 0) {
@@ -322,15 +184,13 @@ export default function FlocifyDashboard() {
     });
     if (!confirmed) return;
 
-    setIsLoading(true);
-
     // 1. Simpan ke Arsip
     const { error: archiveError } = await supabase.from("archives").insert({
       id: generateId("arc"),
       title: sprintName,
       closed_by: me,
       total_done: doneTasks.length,
-      tasks_data: doneTasks, // Simpan seluruh object task
+      tasks_data: doneTasks,
     });
 
     if (archiveError) {
@@ -339,7 +199,6 @@ export default function FlocifyDashboard() {
         message: archiveError.message,
         tone: "danger",
       });
-      setIsLoading(false);
       return;
     }
 
@@ -355,12 +214,11 @@ export default function FlocifyDashboard() {
         message: deleteError.message,
         tone: "danger",
       });
-      setIsLoading(false);
       return;
     }
 
     // 3. Notifikasi Sukses
-    const { error: notifError } = await supabase.from("notifications").insert({
+    await supabase.from("notifications").insert({
       id: generateId("n-close"),
       user_id: "All",
       message: `🏁 SPRINT CLOSED: "${sprintName}" telah diarsipkan oleh ${me}.`,
@@ -370,12 +228,9 @@ export default function FlocifyDashboard() {
 
     await dialog.alert({
       title: "Tutup Buku Berhasil",
-      message: notifError
-        ? "Arsip tersimpan, tapi notifikasi gagal dikirim."
-        : "Cek menu Laporan untuk melihat arsip.",
-      tone: notifError ? "danger" : "default",
+      message: "Cek menu Laporan untuk melihat arsip.",
     });
-    window.location.reload();
+    // Tidak perlu reload, realtime akan update otomatis
   };
 
   // --- SEEDING (RESET) ---
@@ -389,46 +244,9 @@ export default function FlocifyDashboard() {
     });
     if (!confirmed) return;
 
-    setIsLoading(true);
-    const { error: resetTasksError } = await supabase
-      .from("tasks")
-      .delete()
-      .neq("id", "0");
-    if (resetTasksError) {
-      await dialog.alert({
-        title: "Reset Gagal",
-        message: resetTasksError.message,
-        tone: "danger",
-      });
-      setIsLoading(false);
-      return;
-    }
-    const { error: resetNotifsError } = await supabase
-      .from("notifications")
-      .delete()
-      .neq("id", "0");
-    if (resetNotifsError) {
-      await dialog.alert({
-        title: "Reset Gagal",
-        message: resetNotifsError.message,
-        tone: "danger",
-      });
-      setIsLoading(false);
-      return;
-    }
-    const { error: resetArchivesError } = await supabase
-      .from("archives")
-      .delete()
-      .neq("id", "0"); // Reset Arsip juga biar bersih
-    if (resetArchivesError) {
-      await dialog.alert({
-        title: "Reset Gagal",
-        message: resetArchivesError.message,
-        tone: "danger",
-      });
-      setIsLoading(false);
-      return;
-    }
+    await supabase.from("tasks").delete().neq("id", "0");
+    await supabase.from("notifications").delete().neq("id", "0");
+    await supabase.from("archives").delete().neq("id", "0");
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const seedTasks = INITIAL_TASKS.map((t: any) => ({
@@ -456,35 +274,14 @@ export default function FlocifyDashboard() {
       timestamp: n.timestamp,
     }));
 
-    const { error: seedTasksError } = await supabase
-      .from("tasks")
-      .insert(seedTasks);
-    if (seedTasksError) {
-      await dialog.alert({
-        title: "Reset Gagal",
-        message: seedTasksError.message,
-        tone: "danger",
-      });
-      setIsLoading(false);
-      return;
-    }
-    const { error: seedNotifsError } = await supabase
-      .from("notifications")
-      .insert(seedNotifs);
-    if (seedNotifsError) {
-      await dialog.alert({
-        title: "Reset Gagal",
-        message: seedNotifsError.message,
-        tone: "danger",
-      });
-      setIsLoading(false);
-      return;
-    }
+    await supabase.from("tasks").insert(seedTasks);
+    await supabase.from("notifications").insert(seedNotifs);
+
     await dialog.alert({
       title: "Reset Berhasil",
       message: "Data dummy sudah dimuat ulang.",
     });
-    window.location.reload();
+    // Tidak perlu reload
   };
 
   // --- CRUD HANDLERS ---
@@ -493,6 +290,12 @@ export default function FlocifyDashboard() {
     if (!task || task.status === status) return;
 
     const timestamp = getTimestamp();
+
+    // LOGIKA BARU: Cek Finished At
+    // Kalau status baru adalah 'done', isi finished_at dengan jam sekarang.
+    // Kalau status baru BUKAN 'done' (misal dibalikin ke review), kosongkan finished_at.
+    const finishedAt = status === "done" ? timestamp : null;
+
     const nextHistory = [
       {
         id: generateId("h-status"),
@@ -505,42 +308,46 @@ export default function FlocifyDashboard() {
       },
       ...(task.history || []),
     ];
-    const updatedTask: Task = { ...task, status, history: nextHistory };
 
+    // Optimistic Update (Update tampilan dulu biar cepat)
+    const updatedTask: Task = {
+      ...task,
+      status,
+      history: nextHistory,
+      finished_at: finishedAt, // Update di state lokal juga
+    };
     setTasks((prev) => prev.map((t) => (t.id === id ? updatedTask : t)));
+
+    // Update ke Database
     const { error: updateError } = await supabase
       .from("tasks")
-      .update({ status, history: nextHistory })
+      .update({
+        status,
+        history: nextHistory,
+        finished_at: finishedAt, // Kirim ke database
+      })
       .eq("id", id);
+
     if (updateError) {
       await dialog.alert({
         title: "Gagal Update Status",
         message: updateError.message,
         tone: "danger",
       });
-      setTasks((prev) => prev.map((t) => (t.id === id ? task : t)));
+      refreshData(); // Revert kalau gagal
       return;
     }
 
     if (status === "review") {
-      const { error: notifError } = await supabase
-        .from("notifications")
-        .insert({
-          id: generateId("n-rev"),
-          user_id: "Zaenal",
-          message: `🔍 REVIEW: ${me} -> "${task.title}". ${buildTaskTag(
-            task.id
-          )}`,
-          type: "warning",
-          timestamp,
-        });
-      if (notifError) {
-        await dialog.alert({
-          title: "Notifikasi Gagal",
-          message: notifError.message,
-          tone: "danger",
-        });
-      }
+      await supabase.from("notifications").insert({
+        id: generateId("n-rev"),
+        user_id: "Zaenal",
+        message: `🔍 REVIEW: ${me} -> "${task.title}". ${buildTaskTag(
+          task.id,
+        )}`,
+        type: "warning",
+        timestamp,
+      });
     }
   };
 
@@ -561,6 +368,7 @@ export default function FlocifyDashboard() {
       subtasks: task.subtasks,
       history: task.history,
     };
+
     if (editingTask) {
       const { error: updateError } = await supabase
         .from("tasks")
@@ -586,25 +394,16 @@ export default function FlocifyDashboard() {
         });
         return;
       }
-      const { error: notifError } = await supabase
-        .from("notifications")
-        .insert({
-          id: generateId("n-new"),
-          user_id: task.pic,
-          message: `✨ TUGAS BARU: "${task.title}". ${buildTaskTag(task.id)}`,
-          type: "info",
-          timestamp: getTimestamp(),
-        });
-      if (notifError) {
-        await dialog.alert({
-          title: "Tugas Tersimpan",
-          message: "Tugas tersimpan, tapi notifikasi gagal dikirim.",
-          tone: "danger",
-        });
-      }
+      await supabase.from("notifications").insert({
+        id: generateId("n-new"),
+        user_id: task.pic,
+        message: `✨ TUGAS BARU: "${task.title}". ${buildTaskTag(task.id)}`,
+        type: "info",
+        timestamp: getTimestamp(),
+      });
     }
-    await fetchFromDatabase();
     handleCloseModal();
+    // Tidak perlu fetchFromDatabase(), realtime akan handle
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -616,53 +415,35 @@ export default function FlocifyDashboard() {
       tone: "danger",
     });
     if (!confirmed) return;
+
+    // Optimistic delete
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+
     const { error: deleteError } = await supabase
       .from("tasks")
       .delete()
       .eq("id", id);
+
     if (deleteError) {
       await dialog.alert({
         title: "Gagal Menghapus",
         message: deleteError.message,
         tone: "danger",
       });
-      return;
+      refreshData();
     }
-    setTasks((prev) => prev.filter((t) => t.id !== id));
   };
 
   const handleMarkRead = async (id: string) => {
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
+      prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
     );
-    const { error: readError } = await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("id", id);
-    if (readError) {
-      await dialog.alert({
-        title: "Gagal Memperbarui",
-        message: readError.message,
-        tone: "danger",
-      });
-      await fetchFromDatabase();
-    }
+    await supabase.from("notifications").update({ is_read: true }).eq("id", id);
   };
 
   const handleClearNotifs = async () => {
     setNotifications((prev) => prev.filter((n) => n.userId !== me));
-    const { error: clearError } = await supabase
-      .from("notifications")
-      .delete()
-      .eq("user_id", me);
-    if (clearError) {
-      await dialog.alert({
-        title: "Gagal Menghapus",
-        message: clearError.message,
-        tone: "danger",
-      });
-      await fetchFromDatabase();
-    }
+    await supabase.from("notifications").delete().eq("user_id", me);
   };
 
   const handleLogin = (u: string) => {
@@ -692,18 +473,22 @@ export default function FlocifyDashboard() {
     );
   });
   const myTasks = filteredTasks.filter(
-    (t) => t.pic === me || (t.members && t.members.includes(me))
+    (t) => t.pic === me || (t.members && t.members.includes(me)),
   );
   const overdueTasks = filteredTasks.filter(
-    (t) => t.status !== "done" && daysBetween(t.due, today) > 0
+    (t) => t.status !== "done" && daysBetween(t.due, today) > 0,
   );
 
   if (isLoading)
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center text-slate-400">
-        Syncing...
+        <div className="flex flex-col items-center gap-2">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-500 dark:border-slate-800 dark:border-t-indigo-400"></div>
+          <span className="text-sm font-medium">Connecting to HQ...</span>
+        </div>
       </div>
     );
+
   if (!isLoggedIn) return <LoginPage onLogin={handleLogin} />;
 
   return (
@@ -727,7 +512,7 @@ export default function FlocifyDashboard() {
       />
       <main className="mx-auto max-w-7xl px-4 py-6">
         {["my", "all", "timeline", "calendar", "overdue"].includes(
-          effectiveTab
+          effectiveTab,
         ) && (
           <div className="mb-6">
             <TaskFilters
@@ -755,9 +540,6 @@ export default function FlocifyDashboard() {
         {effectiveTab === "calendar" && (
           <GanttView tasks={filteredTasks} today={today} />
         )}
-        {FEATURE_FLAGS.hq && effectiveTab === "hq" && (
-          <StrategicDashboard tasks={tasks} />
-        )}
         {effectiveTab === "all" && (
           <TaskList
             tasks={filteredTasks}
@@ -779,9 +561,7 @@ export default function FlocifyDashboard() {
             emptyMessage="Aman! Tidak ada tugas yang telat."
           />
         )}
-        {effectiveTab === "performance" && (
-          <PerformanceTable tasks={tasks} today={today} />
-        )}
+        {effectiveTab === "performance" && <PerformanceTable tasks={tasks} />}
         {effectiveTab === "requests" && isSuperAdmin && (
           <RequestInbox items={pendingRequests} />
         )}

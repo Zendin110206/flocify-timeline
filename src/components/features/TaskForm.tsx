@@ -8,9 +8,10 @@ import {
   Subtask,
   HistoryLog,
 } from "@/lib/types";
-import { ADMINS, DIVISIONS, PEOPLE, SUPER_ADMIN } from "@/lib/data";
+import { DIVISIONS, PEOPLE } from "@/lib/data";
 import { todayISO, STATUS_CONFIG, formatDate } from "@/lib/utils";
 import { useDialog } from "@/components/ui/DialogProvider";
+import { usePermission } from "@/hooks/usePermission";
 import {
   Check,
   Plus,
@@ -30,6 +31,15 @@ interface TaskFormProps {
   tasks?: Task[];
 }
 
+// --- KONSTANTA (Dipindah ke luar biar ESLint senang & performa lebih cepat) ---
+const WORKLOAD_RULES = { maxHighPriority: 3, maxActive: 5 };
+const WORKLOAD_LABEL = {
+  overloaded: "Overloaded",
+  steady: "Steady",
+  idle: "Idle",
+};
+const WORKLOAD_DOT = { overloaded: "🔴", steady: "🟡", idle: "🟢" };
+
 export function TaskForm({
   initialData,
   onSave,
@@ -39,39 +49,32 @@ export function TaskForm({
 }: TaskFormProps) {
   const dialog = useDialog();
   const currentUser = defaultOwner;
-  const isSuperAdmin = currentUser === SUPER_ADMIN;
-  const isAdmin = ADMINS.includes(currentUser);
+
+  const { isSuperAdmin, isAdmin, canChangeDeadline, canMarkDone } =
+    usePermission(currentUser);
+
   const isPic = initialData ? initialData.pic === currentUser : true;
   const isMember = initialData
     ? initialData.members.includes(currentUser)
     : false;
+  const isNewTask = !initialData;
+  const isDone = initialData?.status === "done";
 
-  const canEditAny = isSuperAdmin || isAdmin || isPic || isMember;
-  const canEditCore = isSuperAdmin || isAdmin || isPic;
-  const canEditPic = isSuperAdmin || isAdmin;
-  const canEditMembers = isSuperAdmin || isAdmin || isPic;
-  const canEditStatus = isSuperAdmin || isAdmin || isPic || isMember;
-  const canEditChecklist = canEditStatus;
-  const canEditOutput = canEditStatus;
-  const canEditStart = isSuperAdmin || isAdmin || isPic;
-  const canEditDeadline = isSuperAdmin || !initialData;
-  const isReadOnly = !canEditAny && !!initialData;
-
-  type WorkloadStatus = "overloaded" | "steady" | "idle";
-  const WORKLOAD_RULES = { maxHighPriority: 3, maxActive: 5 };
-  const WORKLOAD_LABEL: Record<WorkloadStatus, string> = {
-    overloaded: "Overloaded",
-    steady: "Steady",
-    idle: "Idle",
-  };
-  const WORKLOAD_DOT: Record<WorkloadStatus, string> = {
-    overloaded: "🔴",
-    steady: "🟡",
-    idle: "🟢",
-  };
+  const isLocked = isDone && !isAdmin;
+  const canEditCore =
+    !isLocked && (isSuperAdmin || isAdmin || isPic || isNewTask);
+  const canEditPic = !isLocked && (isSuperAdmin || isAdmin || isNewTask);
+  const canEditMembers =
+    !isLocked && (isSuperAdmin || isAdmin || isPic || isNewTask);
+  const canEditProgress =
+    !isLocked && (isSuperAdmin || isAdmin || isPic || isMember || isNewTask);
+  const canEditDeadline = !isLocked && (isNewTask || canChangeDeadline());
+  const canSelectDone = canMarkDone();
+  const isReadOnly = !canEditProgress && !isNewTask;
 
   const [activeTab, setActiveTab] = useState<"detail" | "history">("detail");
   const [reason, setReason] = useState("");
+  const [newSubtask, setNewSubtask] = useState("");
 
   const [formData, setFormData] = useState<Partial<Task>>(
     initialData || {
@@ -86,51 +89,46 @@ export function TaskForm({
       output: "",
       subtasks: [],
       history: [],
-    }
+    },
   );
 
-  const [newSubtask, setNewSubtask] = useState("");
-  const isDateChanged = initialData && formData.due !== initialData.due;
-  const totalSubtasks = formData.subtasks?.length || 0;
-  const completedSubtasks =
-    formData.subtasks?.filter((s) => s.isCompleted).length || 0;
-  const isChecklistComplete =
-    totalSubtasks === 0 || completedSubtasks === totalSubtasks;
-  const canMarkDone = isChecklistComplete || isSuperAdmin;
-  const isMarkingDone =
-    formData.status === "done" && initialData?.status !== "done";
-
+  // --- LOGIKA WORKLOAD ---
   const workloadByPerson = useMemo(() => {
     const map: Record<
       string,
-      { activeCount: number; highPriorityCount: number; status: WorkloadStatus }
+      {
+        activeCount: number;
+        highPriorityCount: number;
+        status: "overloaded" | "steady" | "idle";
+      }
     > = {};
     const activeTasks = tasks.filter(
       (task) =>
-        task.status !== "done" && (!initialData || task.id !== initialData.id)
+        task.status !== "done" && (!initialData || task.id !== initialData.id),
     );
     PEOPLE.forEach((person) => {
       const myTasks = activeTasks.filter((task) => task.pic === person);
       const activeCount = myTasks.length;
       const highPriorityCount = myTasks.filter(
-        (task) => task.priority === "high"
+        (task) => task.priority === "high",
       ).length;
-      const status: WorkloadStatus =
+      const status =
         highPriorityCount > WORKLOAD_RULES.maxHighPriority ||
         activeCount > WORKLOAD_RULES.maxActive
           ? "overloaded"
           : activeCount === 0
-          ? "idle"
-          : "steady";
+            ? "idle"
+            : "steady";
       map[person] = { activeCount, highPriorityCount, status };
     });
     return map;
-  }, [tasks, initialData, WORKLOAD_RULES.maxHighPriority, WORKLOAD_RULES.maxActive]);
+  }, [tasks, initialData]); // Dependency aman karena WORKLOAD_RULES sudah diluar
 
   const selectedWorkload = formData.pic
     ? workloadByPerson[formData.pic]
     : undefined;
 
+  // --- HANDLERS ---
   const toggleMember = (person: string) => {
     if (!canEditMembers) return;
     const current = formData.members || [];
@@ -145,7 +143,7 @@ export function TaskForm({
   };
 
   const addSubtask = () => {
-    if (!canEditChecklist || !newSubtask.trim()) return;
+    if (!canEditProgress || !newSubtask.trim()) return;
     const sub: Subtask = {
       id: `s${Date.now()}`,
       title: newSubtask,
@@ -156,7 +154,7 @@ export function TaskForm({
   };
 
   const removeSubtask = (id: string) => {
-    if (!canEditChecklist) return;
+    if (!canEditProgress) return;
     setFormData({
       ...formData,
       subtasks: (formData.subtasks || []).filter((s) => s.id !== id),
@@ -164,11 +162,11 @@ export function TaskForm({
   };
 
   const toggleSubtask = (id: string) => {
-    if (!canEditChecklist) return;
+    if (!canEditProgress) return;
     setFormData({
       ...formData,
       subtasks: (formData.subtasks || []).map((s) =>
-        s.id === id ? { ...s, isCompleted: !s.isCompleted } : s
+        s.id === id ? { ...s, isCompleted: !s.isCompleted } : s,
       ),
     });
   };
@@ -177,6 +175,7 @@ export function TaskForm({
     e.preventDefault();
     if (isReadOnly) return;
     if (!formData.title?.trim()) return;
+
     if (formData.start && formData.due && formData.start > formData.due) {
       void dialog.alert({
         title: "Tanggal Tidak Valid",
@@ -186,6 +185,7 @@ export function TaskForm({
       return;
     }
 
+    const isDateChanged = initialData && formData.due !== initialData.due;
     if (isDateChanged && !reason.trim()) {
       void dialog.alert({
         title: "Alasan Wajib",
@@ -194,7 +194,25 @@ export function TaskForm({
       });
       return;
     }
-    if (isMarkingDone && !canMarkDone) {
+
+    if (
+      formData.status === "done" &&
+      !canSelectDone &&
+      initialData?.status !== "done"
+    ) {
+      void dialog.alert({
+        title: "Akses Ditolak",
+        message: "Hanya Admin yang boleh memvalidasi tugas menjadi Done.",
+        tone: "danger",
+      });
+      return;
+    }
+
+    const totalSub = formData.subtasks?.length || 0;
+    const doneSub = formData.subtasks?.filter((s) => s.isCompleted).length || 0;
+    const isChecklistComplete = totalSub === 0 || doneSub === totalSub;
+
+    if (formData.status === "done" && !isChecklistComplete && !isSuperAdmin) {
       void dialog.alert({
         title: "Checklist Belum Lengkap",
         message: "Selesaikan checklist dulu sebelum status Done.",
@@ -211,9 +229,7 @@ export function TaskForm({
         id: `h${Date.now()}-1`,
         user: defaultOwner,
         action: "Rescheduled",
-        detail: `Deadline: ${formatDate(initialData.due)} -> ${formatDate(
-          formData.due!
-        )}`,
+        detail: `Deadline: ${formatDate(initialData.due)} -> ${formatDate(formData.due!)}`,
         reason: reason,
         timestamp: timestamp,
       });
@@ -224,9 +240,7 @@ export function TaskForm({
         id: `h${Date.now()}-2`,
         user: defaultOwner,
         action: "Status Update",
-        detail: `${STATUS_CONFIG[initialData.status].label} -> ${
-          STATUS_CONFIG[formData.status!].label
-        }`,
+        detail: `${STATUS_CONFIG[initialData.status].label} -> ${STATUS_CONFIG[formData.status!].label}`,
         timestamp: timestamp,
       });
     }
@@ -265,6 +279,11 @@ export function TaskForm({
       {isReadOnly && (
         <div className="bg-amber-100 p-3 text-center text-xs font-bold text-amber-800 border-b border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-800">
           🔒 MODE BACA: Anda tidak punya akses edit tugas ini.
+        </div>
+      )}
+      {isLocked && !isReadOnly && (
+        <div className="bg-emerald-100 p-3 text-center text-xs font-bold text-emerald-800 border-b border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-200 dark:border-emerald-800">
+          ✅ TUGAS SELESAI: Data terkunci. Hubungi Admin untuk membuka kembali.
         </div>
       )}
 
@@ -386,6 +405,8 @@ export function TaskForm({
                   );
                 })}
               </select>
+
+              {/* --- BAGIAN INI SUDAH DIKEMBALIKAN LENGKAP --- */}
               <div className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
                 <p>
                   Overloaded: &gt;{WORKLOAD_RULES.maxHighPriority} high atau
@@ -441,11 +462,9 @@ export function TaskForm({
                   <div key={sub.id} className="flex items-center gap-2 group">
                     <button
                       type="button"
-                      disabled={!canEditChecklist}
+                      disabled={!canEditProgress}
                       onClick={() => toggleSubtask(sub.id)}
-                      className={`text-slate-400 ${
-                        sub.isCompleted ? "text-indigo-600" : ""
-                      } disabled:opacity-50`}
+                      className={`text-slate-400 ${sub.isCompleted ? "text-indigo-600" : ""} disabled:opacity-50`}
                     >
                       {sub.isCompleted ? (
                         <CheckSquare size={18} />
@@ -454,15 +473,11 @@ export function TaskForm({
                       )}
                     </button>
                     <span
-                      className={`flex-1 text-sm ${
-                        sub.isCompleted
-                          ? "text-slate-400 line-through"
-                          : "text-slate-700 dark:text-slate-200"
-                      }`}
+                      className={`flex-1 text-sm ${sub.isCompleted ? "text-slate-400 line-through" : "text-slate-700 dark:text-slate-200"}`}
                     >
                       {sub.title}
                     </span>
-                    {canEditChecklist && (
+                    {canEditProgress && (
                       <button
                         type="button"
                         onClick={() => removeSubtask(sub.id)}
@@ -474,7 +489,7 @@ export function TaskForm({
                   </div>
                 ))}
               </div>
-              {canEditChecklist && (
+              {canEditProgress && (
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -508,7 +523,7 @@ export function TaskForm({
               </label>
               <input
                 type="date"
-                disabled={!canEditStart}
+                disabled={!canEditCore}
                 value={formData.start}
                 onChange={(e) =>
                   setFormData({ ...formData, start: e.target.value })
@@ -528,13 +543,15 @@ export function TaskForm({
               <input
                 type="date"
                 disabled={!canEditDeadline}
-                title={!canEditDeadline ? "Minta Zaenal buat ganti tanggal" : ""}
+                title={
+                  !canEditDeadline ? "Minta Zaenal buat ganti tanggal" : ""
+                }
                 value={formData.due}
                 onChange={(e) =>
                   setFormData({ ...formData, due: e.target.value })
                 }
                 className={`w-full rounded-lg border px-3 py-2 text-sm dark:bg-slate-800 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed ${
-                  isDateChanged
+                  initialData && formData.due !== initialData.due
                     ? "border-rose-500 ring-1 ring-rose-500"
                     : "border-slate-300 dark:border-slate-600"
                 }`}
@@ -542,7 +559,7 @@ export function TaskForm({
             </div>
           </div>
 
-          {isDateChanged && (
+          {initialData && formData.due !== initialData.due && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 dark:bg-rose-900/20 dark:border-rose-800">
               <label className="mb-1 flex items-center gap-2 text-sm font-bold text-rose-700 dark:text-rose-400">
                 <AlertTriangle size={16} /> Alasan Perubahan (Wajib)
@@ -563,7 +580,7 @@ export function TaskForm({
               Status
             </label>
             <select
-              disabled={!canEditStatus}
+              disabled={!canEditProgress}
               value={formData.status}
               onChange={(e) =>
                 setFormData({
@@ -573,21 +590,25 @@ export function TaskForm({
               }
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-600 dark:text-white disabled:opacity-50"
             >
-              {Object.entries(STATUS_CONFIG).map(([key, val]) => {
-                if (key === "done" && !canMarkDone && formData.status !== "done")
-                  return null;
-                return (
-                  <option key={key} value={key}>
-                    {val.label}
-                  </option>
-                );
-              })}
+              {Object.entries(STATUS_CONFIG).map(([key, val]) => (
+                <option
+                  key={key}
+                  value={key}
+                  disabled={
+                    key === "done" &&
+                    !canSelectDone &&
+                    initialData?.status !== "done"
+                  }
+                >
+                  {val.label}{" "}
+                  {key === "done" &&
+                  !canSelectDone &&
+                  initialData?.status !== "done"
+                    ? "(Admin Only)"
+                    : ""}
+                </option>
+              ))}
             </select>
-            {!canMarkDone && formData.status !== "done" && (
-              <p className="mt-1 text-xs text-rose-500 dark:text-rose-400">
-                Checklist harus lengkap sebelum status Done.
-              </p>
-            )}
           </div>
 
           <div>
@@ -595,7 +616,7 @@ export function TaskForm({
               Output / Bukti
             </label>
             <textarea
-              disabled={!canEditOutput}
+              disabled={!canEditProgress}
               required
               rows={2}
               value={formData.output}
@@ -609,9 +630,7 @@ export function TaskForm({
         </form>
 
         <div
-          className={`space-y-4 ${
-            activeTab === "history" ? "block" : "hidden"
-          }`}
+          className={`space-y-4 ${activeTab === "history" ? "block" : "hidden"}`}
         >
           {formData.history && formData.history.length > 0 ? (
             formData.history.map((log) => (
@@ -678,5 +697,3 @@ export function TaskForm({
     </div>
   );
 }
-
-

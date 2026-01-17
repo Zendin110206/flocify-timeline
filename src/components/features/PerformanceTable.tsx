@@ -1,122 +1,259 @@
 // src/components/features/PerformanceTable.tsx
-import React, { useState } from "react";
-import { cn } from "@/lib/utils";
-import { Task } from "@/lib/types";
+import React, { useState, useMemo } from "react";
+import { cn, daysBetween } from "@/lib/utils";
+import { Task, HistoryLog } from "@/lib/types";
+import { supabase } from "@/lib/supabase";
 import {
   Trophy,
   TrendingUp,
   Medal,
   AlertOctagon,
   ShieldCheck,
-  Info,
   Calculator,
-  CheckCircle2,
   AlertTriangle,
-  Gavel,
   X,
   Printer,
+  Timer,
+  Eraser,
 } from "lucide-react";
 import { ADMINS, PEOPLE } from "@/lib/data";
+import { useDialog } from "@/components/ui/DialogProvider";
+import { StrikeManagerModal } from "./StrikeManagerModal";
 
+// Hapus 'today' dari props karena tidak dipakai di logika baru
 interface PerformanceTableProps {
   tasks: Task[];
-  today: string;
 }
 
-export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
+// --- KONFIGURASI SKOR (GAMIFICATION) ---
+const SCORE_RULES = {
+  base: { high: 20, medium: 10, low: 5 },
+  speedBonusPerDay: 2, // Poin per hari lebih cepat
+  maxSpeedBonus: 10, // Maksimal bonus kecepatan
+  latePenaltyPerDay: 5, // Denda per hari telat
+};
+
+const generateId = (prefix: string) =>
+  `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+export function PerformanceTable({ tasks }: PerformanceTableProps) {
+  const dialog = useDialog();
+
+  // State untuk User Login (Hanya untuk cek admin)
   const getStoredUser = () => {
     if (typeof window === "undefined") return "";
     return localStorage.getItem("flocify-user") || "";
   };
   const [currentUser] = useState(getStoredUser);
+  const isAdmin = ADMINS.includes(currentUser);
+
+  // State Modal
   const [selectedSP, setSelectedSP] = useState<{
     name: string;
     count: number;
   } | null>(null);
+  const [amnestyTarget, setAmnestyTarget] = useState<{
+    name: string;
+    currentStrikes: number;
+  } | null>(null);
 
-  const isAdmin = ADMINS.includes(currentUser);
+  // --- 1. LOGIKA HITUNG SKOR & STATISTIK ---
+  const stats = useMemo(() => {
+    return PEOPLE.map((member) => {
+      const memberTasks = tasks.filter((t) => t.pic === member);
+      const total = memberTasks.length;
+      const doneTasks = memberTasks.filter((t) => t.status === "done");
+      const doneCount = doneTasks.length;
 
-  // 1. OLAH DATA (Kalkulasi Statistik Real-Time)
-  const allMembers = PEOPLE;
-  // --- UPDATE LOGIKA STATS (GANTI BAGIAN INI) ---
-  const stats = allMembers.map((member) => {
-    const memberTasks = tasks.filter((t) => t.pic === member);
-    const total = memberTasks.length;
-    const done = memberTasks.filter((t) => t.status === "done").length;
+      // Hitung Workload Aktif
+      const activeTasks = memberTasks.filter((t) => t.status !== "done");
+      const activeCount = activeTasks.length;
+      const highPriorityActive = activeTasks.filter(
+        (t) => t.priority === "high",
+      ).length;
 
-    // Perhitungan Workload Aktif (Bukan Done)
-    const activeTasks = memberTasks.filter((t) => t.status !== "done");
-    const activeCount = activeTasks.length;
-    const highPriorityActive = activeTasks.filter(
-      (t) => t.priority === "high"
-    ).length;
+      const isOverloaded = highPriorityActive > 3 || activeCount > 5;
+      const isIdle = activeCount === 0;
+      const workloadStatus = isOverloaded
+        ? "overloaded"
+        : isIdle
+          ? "idle"
+          : "steady";
 
-    // Aturan Workload (Sesuai Codex Logic)
-    const isOverloaded = highPriorityActive > 3 || activeCount > 5;
-    const isIdle = activeCount === 0;
-    const workloadStatus = isOverloaded
-      ? "overloaded"
-      : isIdle
-      ? "idle"
-      : "steady";
+      // Hitung Strike (Total dari database)
+      const totalStrikes = memberTasks.reduce(
+        (acc, curr) => acc + (curr.strikes || 0),
+        0,
+      );
 
-    const historicalStrikes = memberTasks.reduce(
-      (acc, curr) => acc + (curr.strikes || 0),
-      0
+      // --- LOGIKA BARU: HITUNG SKOR DETAIL ---
+      let totalScore = 0;
+      let totalDaysSaved = 0; // Untuk Avg Pace
+
+      doneTasks.forEach((t) => {
+        // 1. Base Score
+        let taskScore = SCORE_RULES.base[t.priority] || 5;
+
+        // 2. Cari Tanggal Selesai (Pakai kolom finished_at yang baru)
+        // Kalau finished_at kosong (data lama), pakai due date biar adil (skor 0)
+        const finishedDateISO = t.finished_at || t.due;
+
+        const diff = daysBetween(finishedDateISO, t.due);
+
+        if (diff > 0) {
+          // Bonus Kecepatan
+          const bonus = Math.min(
+            diff * SCORE_RULES.speedBonusPerDay,
+            SCORE_RULES.maxSpeedBonus,
+          );
+          taskScore += bonus;
+          totalDaysSaved += diff;
+        } else if (diff < 0) {
+          // Denda Telat
+          const penalty = Math.abs(diff) * SCORE_RULES.latePenaltyPerDay;
+          taskScore -= penalty;
+          totalDaysSaved += diff;
+        }
+
+        totalScore += taskScore;
+      });
+
+      // Kurangi Skor Total dengan Strike yang masih aktif
+      totalScore -= totalStrikes * 15;
+
+      // Hitung Avg Pace
+      const avgPace =
+        doneCount > 0 ? (totalDaysSaved / doneCount).toFixed(1) : "0.0";
+      const efficiency =
+        total === 0 ? 0 : Math.round((doneCount / total) * 100);
+
+      // Tentukan Status Member
+      let status = "N/A";
+      let statusColor = "";
+
+      if (totalStrikes > 0) {
+        status = "Warning";
+        statusColor =
+          "text-rose-600 bg-rose-50 border-rose-100 dark:text-rose-400 dark:bg-rose-500/10 dark:border-rose-500/20";
+      } else if (efficiency >= 80 && totalScore > 50) {
+        status = "Excellent";
+        statusColor =
+          "text-emerald-600 bg-emerald-50 border-emerald-100 dark:text-emerald-400 dark:bg-emerald-500/10 dark:border-emerald-500/20";
+      } else if (efficiency >= 50) {
+        status = "Good";
+        statusColor =
+          "text-blue-600 bg-blue-50 border-blue-100 dark:text-blue-400 dark:bg-blue-500/10 dark:border-blue-500/20";
+      } else {
+        status = "Low Perf";
+        statusColor =
+          "text-slate-500 bg-slate-100 border-slate-200 dark:text-slate-400 dark:bg-slate-800 dark:border-slate-700";
+      }
+
+      return {
+        member,
+        total,
+        done: doneCount,
+        totalStrikes,
+        efficiency,
+        score: totalScore,
+        avgPace,
+        status,
+        statusColor,
+        workloadStatus,
+        activeCount,
+        highPriorityActive,
+      };
+    });
+  }, [tasks]);
+
+  // Urutkan Ranking
+  const sortedStats = [...stats].sort((a, b) => b.score - a.score);
+  const topThree = sortedStats.slice(0, 3);
+  const getInitials = (name: string) => name.substring(0, 2).toUpperCase();
+
+  // --- HANDLER PENGAMPUNAN (AMNESTY) ---
+  const handleAmnesty = async (
+    action: "reduce_one" | "reset_all",
+    reason: string,
+  ) => {
+    if (!amnestyTarget) return;
+
+    const targetTasks = tasks.filter(
+      (t) => t.pic === amnestyTarget.name && t.strikes > 0,
     );
-    const activeOverdue = memberTasks.filter(
-      (t) => t.status !== "done" && t.due < today
-    ).length;
-    const totalIssues = Math.max(historicalStrikes, activeOverdue);
 
-    const efficiency = total === 0 ? 0 : Math.round((done / total) * 100);
-    const score = Math.round(done * 10 - totalIssues * 15 + efficiency / 2);
-
-    let status = "N/A";
-    let statusColor = "";
-
-    if (totalIssues > 0) {
-      status = "Warning";
-      statusColor =
-        "text-rose-600 bg-rose-50 border-rose-100 dark:text-rose-400 dark:bg-rose-500/10 dark:border-rose-500/20";
-    } else if (efficiency >= 80 && total >= 2) {
-      status = "Excellent";
-      statusColor =
-        "text-emerald-600 bg-emerald-50 border-emerald-100 dark:text-emerald-400 dark:bg-emerald-500/10 dark:border-emerald-500/20";
-    } else if (efficiency >= 50) {
-      status = "Good";
-      statusColor =
-        "text-blue-600 bg-blue-50 border-blue-100 dark:text-blue-400 dark:bg-blue-500/10 dark:border-blue-500/20";
-    } else {
-      status = "Low Perf";
-      statusColor =
-        "text-slate-500 bg-slate-100 border-slate-200 dark:text-slate-400 dark:bg-slate-800 dark:border-slate-700";
+    if (targetTasks.length === 0) {
+      await dialog.alert({
+        title: "Tidak Ada Strike",
+        message:
+          "User ini tidak memiliki tugas dengan strike aktif untuk dimaafkan.",
+        tone: "warning",
+      });
+      setAmnestyTarget(null);
+      return;
     }
 
-    return {
-      member,
-      total,
-      done,
-      totalIssues,
-      efficiency,
-      score,
-      status,
-      statusColor,
-      workloadStatus, // Data baru
-      activeCount, // Data baru
-      highPriorityActive, // Data baru
-    };
-  });
+    // 1. Update Database (Kurangi Strike)
+    for (const t of targetTasks) {
+      let newStrikes = t.strikes;
 
-  // Urutkan Ranking (Skor Tertinggi di Atas)
-  const sortedStats = stats.sort((a, b) => b.score - a.score);
-  const topThree = sortedStats.slice(0, 3);
+      if (action === "reset_all") {
+        newStrikes = 0;
+      } else {
+        if (newStrikes > 0) {
+          newStrikes = newStrikes - 1;
+        }
+      }
 
-  const getInitials = (name: string) => name.substring(0, 2).toUpperCase();
+      const newHistory: HistoryLog[] = [
+        ...(t.history || []),
+        {
+          id: generateId("h-amnesty"),
+          user: currentUser,
+          action: "Amnesty",
+          detail:
+            action === "reset_all"
+              ? "Reset Strike to 0"
+              : "Strike Reduced (-1)",
+          reason: reason,
+          timestamp: new Date().toISOString(),
+        },
+      ];
+
+      await supabase
+        .from("tasks")
+        .update({ strikes: newStrikes, history: newHistory })
+        .eq("id", t.id);
+
+      if (action === "reduce_one") break;
+    }
+
+    // 2. Kirim Notifikasi ke Member (FITUR BARU)
+    const message =
+      action === "reset_all"
+        ? `🕊️ AMNESTY: Semua sanksi strike Anda telah diputihkan oleh ${currentUser}.`
+        : `🕊️ AMNESTY: Sanksi strike Anda dikurangi (-1) oleh ${currentUser}.`;
+
+    await supabase.from("notifications").insert({
+      id: generateId("n-amnesty"),
+      user_id: amnestyTarget.name, // Kirim ke target (misal: Erpan)
+      message: `${message} Alasan: "${reason}"`,
+      type: "success", // Warna Hijau (Kabar Gembira)
+      timestamp: new Date().toISOString(),
+    });
+
+    await dialog.alert({
+      title: "Amnesty Berhasil",
+      message: `Sanksi untuk ${amnestyTarget.name} telah diperbarui dan notifikasi terkirim.`,
+      tone: "success",
+    });
+
+    setAmnestyTarget(null);
+  };
 
   return (
     <div className="space-y-8 pb-10">
-      {/* HEADER TANGGAL */}
+      {/* HEADER */}
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">
           Executive Dashboard
@@ -132,7 +269,7 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
         </span>
       </div>
 
-      {/* --- SECTION 1: PODIUM (KARTU JUARA) --- */}
+      {/* --- SECTION 1: PODIUM --- */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {topThree.map((stat, index) => {
           let ringColor = "ring-slate-200 dark:ring-slate-700";
@@ -172,8 +309,8 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
               key={stat.member}
               className="relative overflow-hidden rounded-2xl border bg-white p-6 shadow-sm dark:bg-slate-900 dark:border-slate-800 transition-all hover:shadow-md"
             >
+              {/* FIX TAILWIND: bg-linear-to-br */}
               <div className="absolute right-0 top-0 h-24 w-24 translate-x-8 -translate-y-8 bg-linear-to-br from-indigo-500/10 to-transparent rounded-full blur-2xl"></div>
-
               <div className="mb-4 flex items-center justify-between">
                 <div
                   className={`flex h-12 w-12 items-center justify-center rounded-full bg-slate-50 text-[10px] font-bold text-slate-700 ring-4 ${ringColor} dark:bg-slate-800 dark:text-slate-200`}
@@ -182,31 +319,31 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                 </div>
                 <div>{icon}</div>
               </div>
-
               <h3 className="text-lg font-black text-slate-800 dark:text-slate-100">
                 {stat.member}
               </h3>
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
                 {label}
               </p>
-
               <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-4 dark:border-slate-800">
                 <div>
                   <p className="text-[10px] text-slate-400">Total Skor</p>
                   <p
-                    className={`text-xl font-bold ${
-                      stat.score < 0
-                        ? "text-rose-500"
-                        : "text-indigo-600 dark:text-indigo-400"
-                    }`}
+                    className={`text-xl font-bold ${stat.score < 0 ? "text-rose-500" : "text-indigo-600 dark:text-indigo-400"}`}
                   >
                     {stat.score}
                   </p>
                 </div>
                 <div className="text-right">
-                  <p className="text-[10px] text-slate-400">Efficiency</p>
-                  <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
-                    {stat.efficiency}%
+                  <p className="text-[10px] text-slate-400">Avg. Pace</p>
+                  <p
+                    className={`text-xl font-bold ${parseFloat(stat.avgPace) >= 0 ? "text-emerald-600" : "text-rose-500"}`}
+                  >
+                    {parseFloat(stat.avgPace) > 0 ? "+" : ""}
+                    {stat.avgPace}{" "}
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      hari
+                    </span>
                   </p>
                 </div>
               </div>
@@ -219,11 +356,11 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:border-slate-800 dark:bg-slate-900">
         <div className="border-b border-slate-100 px-6 py-5 dark:border-slate-800">
           <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-            <TrendingUp className="text-indigo-500" size={20} />
-            Performance Analytics
+            <TrendingUp className="text-indigo-500" size={20} /> Performance
+            Analytics
           </h3>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Analisa detail kedisiplinan dan produktivitas setiap anggota.
+            Analisa detail kedisiplinan, kecepatan, dan produktivitas.
           </p>
         </div>
 
@@ -236,9 +373,9 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                 <th className="px-6 py-4 font-bold text-center">
                   Productivity
                 </th>
-                <th className="px-6 py-4 font-bold text-center">Points</th>
+                <th className="px-6 py-4 font-bold text-center">Score</th>
+                <th className="px-6 py-4 font-bold text-center">Avg. Pace</th>
                 <th className="px-6 py-4 font-bold text-center">Discipline</th>
-                <th className="px-6 py-4 font-bold text-center">Status</th>
                 <th className="px-6 py-4 font-bold text-center">Action</th>
               </tr>
             </thead>
@@ -272,8 +409,8 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                             stat.efficiency >= 80
                               ? "bg-emerald-500"
                               : stat.efficiency >= 50
-                              ? "bg-blue-500"
-                              : "bg-amber-500"
+                                ? "bg-blue-500"
+                                : "bg-amber-500",
                           )}
                           style={{ width: `${stat.efficiency}%` }}
                         />
@@ -303,45 +440,60 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    {stat.totalIssues === 0 ? (
+                    <div
+                      className={`inline-flex items-center gap-1 text-xs font-bold ${parseFloat(stat.avgPace) >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                    >
+                      <Timer size={14} />
+                      {parseFloat(stat.avgPace) > 0 ? "+" : ""}
+                      {stat.avgPace} d
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    {stat.totalStrikes === 0 ? (
                       <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
                         <ShieldCheck size={12} /> CLEAN
                       </div>
                     ) : (
-                      <div className="flex flex-col items-center gap-1">
-                        <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
-                          <AlertOctagon size={12} /> {stat.totalIssues} LATE
-                        </div>
-                        <span className="text-[9px] text-slate-400 italic">
-                          Historical Strikes
-                        </span>
+                      <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
+                        <AlertOctagon size={12} /> {stat.totalStrikes} STRIKE
                       </div>
                     )}
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span
-                      className={cn(
-                        "inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                        stat.statusColor
-                      )}
-                    >
-                      {stat.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {isAdmin && stat.totalIssues > 0 ? (
-                      <button
-                        onClick={() =>
-                          setSelectedSP({
-                            name: stat.member,
-                            count: stat.totalIssues,
-                          })
-                        }
-                        className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-900/20"
-                        title="Issue Warning Letter"
-                      >
-                        <Gavel size={16} />
-                      </button>
+                    {isAdmin ? (
+                      <div className="flex items-center justify-center gap-2">
+                        {stat.totalStrikes > 0 && (
+                          <>
+                            <button
+                              onClick={() =>
+                                setSelectedSP({
+                                  name: stat.member,
+                                  count: stat.totalStrikes,
+                                })
+                              }
+                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-900/20"
+                              title="Cetak SP"
+                            >
+                              <Printer size={16} />
+                            </button>
+                            <button
+                              onClick={() =>
+                                setAmnestyTarget({
+                                  name: stat.member,
+                                  currentStrikes: stat.totalStrikes,
+                                })
+                              }
+                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors dark:hover:bg-emerald-900/20"
+                              title="Pengampunan / Reset Strike"
+                            >
+                              <Eraser size={16} />
+                            </button>
+                          </>
+                        )}
+                        {stat.totalStrikes === 0 && (
+                          <span className="text-slate-300">-</span>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-slate-300 dark:text-slate-700">
                         -
@@ -360,20 +512,14 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
         </div>
       </div>
 
-      {/* --- SECTION 3: REAL-TIME TEAM CAPACITY (WORKLOAD) --- */}
+      {/* --- SECTION 3: WORKLOAD HEATMAP --- */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden dark:border-slate-800 dark:bg-slate-900">
-        <div className="border-b border-slate-100 px-6 py-5 dark:border-slate-800 flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-              <ShieldCheck className="text-indigo-500" size={20} />
-              Team Availability Heatmap
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Kapasitas beban kerja anggota berdasarkan tugas aktif saat ini.
-            </p>
-          </div>
+        <div className="border-b border-slate-100 px-6 py-5 dark:border-slate-800">
+          <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+            <ShieldCheck className="text-indigo-500" size={20} /> Team
+            Availability Heatmap
+          </h3>
         </div>
-
         <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {stats.map((s) => (
             <div
@@ -383,8 +529,8 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                 s.workloadStatus === "overloaded"
                   ? "bg-rose-50/50 border-rose-100 dark:bg-rose-900/10 dark:border-rose-900/30"
                   : s.workloadStatus === "idle"
-                  ? "bg-emerald-50/50 border-emerald-100 dark:bg-emerald-900/10 dark:border-emerald-900/30"
-                  : "bg-slate-50 border-slate-100 dark:bg-slate-800/50 dark:border-slate-700"
+                    ? "bg-emerald-50/50 border-emerald-100 dark:bg-emerald-900/10 dark:border-emerald-900/30"
+                    : "bg-slate-50 border-slate-100 dark:bg-slate-800/50 dark:border-slate-700",
               )}
             >
               <div className="flex items-center justify-between mb-3">
@@ -397,14 +543,13 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                     s.workloadStatus === "overloaded"
                       ? "text-rose-600 dark:text-rose-400"
                       : s.workloadStatus === "idle"
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : "text-amber-600 dark:text-amber-400"
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-amber-600 dark:text-amber-400",
                   )}
                 >
                   {s.workloadStatus}
                 </span>
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between text-[10px] text-slate-500">
                   <span>Task Load</span>
@@ -417,8 +562,8 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                       s.workloadStatus === "overloaded"
                         ? "bg-rose-500"
                         : s.workloadStatus === "idle"
-                        ? "bg-emerald-500"
-                        : "bg-amber-500"
+                          ? "bg-emerald-500"
+                          : "bg-amber-500",
                     )}
                     style={{
                       width: `${Math.min((s.activeCount / 5) * 100, 100)}%`,
@@ -431,7 +576,7 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                       "h-2 w-2 rounded-full",
                       s.highPriorityActive > 0
                         ? "bg-rose-500 animate-pulse"
-                        : "bg-slate-300"
+                        : "bg-slate-300",
                     )}
                   />
                   <span className="text-[10px] text-slate-500">
@@ -449,84 +594,39 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
       <div className="grid gap-6 md:grid-cols-2">
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/50">
           <div className="mb-4 flex items-center gap-2 text-slate-800 dark:text-slate-200">
-            <Info size={18} />
-            <h4 className="font-bold text-sm">Kamus Indikator (Legend)</h4>
+            <Calculator size={18} />
+            <h4 className="font-bold text-sm">
+              Rumus Skor Baru (Gamification)
+            </h4>
           </div>
-          <div className="space-y-3">
-            <div className="flex items-start gap-3">
-              <span className="mt-1 flex h-2 w-2 shrink-0 rounded-full bg-emerald-500"></span>
-              <div>
-                <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                  EXCELLENT
-                </p>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Efisiensi &gt; 80% dan 0 Strike. Target Promosi/Bonus.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="mt-1 flex h-2 w-2 shrink-0 rounded-full bg-blue-500"></span>
-              <div>
-                <p className="text-xs font-bold text-blue-600 dark:text-blue-400">
-                  GOOD
-                </p>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Efisiensi &gt; 50% dan 0 Strike. Kinerja Aman.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <span className="mt-1 flex h-2 w-2 shrink-0 rounded-full bg-rose-500"></span>
-              <div>
-                <p className="text-xs font-bold text-rose-600 dark:text-rose-400">
-                  WARNING / RISK
-                </p>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Terdeteksi Strike (Telat) atau produktivitas rendah.
-                  Berpotensi SP.
-                </p>
-              </div>
-            </div>
+          <div className="space-y-2 text-[11px] text-slate-500 dark:text-slate-400">
+            <p>
+              <strong>1. Base Score:</strong> High (20), Medium (10), Low (5).
+            </p>
+            <p>
+              <strong>2. Speed Bonus:</strong> +2 Poin tiap 1 hari lebih cepat
+              (Max 10).
+            </p>
+            <p>
+              <strong>3. Late Penalty:</strong> -5 Poin tiap 1 hari telat.
+            </p>
+            <p>
+              <strong>4. Strike Penalty:</strong> -15 Poin per Strike aktif.
+            </p>
           </div>
         </div>
-
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/50">
           <div className="mb-4 flex items-center gap-2 text-slate-800 dark:text-slate-200">
-            <Calculator size={18} />
-            <h4 className="font-bold text-sm">Transparansi Kalkulasi Skor</h4>
+            <Timer size={18} />
+            <h4 className="font-bold text-sm">Indikator Avg. Pace</h4>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs font-mono text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-            Skor = (Done x 10) - (Strike x 15) + (Eff/2)
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-2">
+            Rata-rata selisih waktu penyelesaian vs deadline.
+          </p>
+          <div className="flex gap-4 text-xs font-bold">
+            <span className="text-emerald-600">+1.5 d (Lebih Cepat)</span>
+            <span className="text-rose-600">-2.0 d (Ngaret)</span>
           </div>
-          <ul className="mt-3 space-y-2 text-[11px] text-slate-500 dark:text-slate-400">
-            <li className="flex items-center gap-2">
-              <CheckCircle2 size={12} className="text-emerald-500" />{" "}
-              <span>
-                <strong className="text-slate-700 dark:text-slate-300">
-                  +10 Poin
-                </strong>{" "}
-                setiap tugas selesai (Done).
-              </span>
-            </li>
-            <li className="flex items-center gap-2">
-              <AlertTriangle size={12} className="text-rose-500" />{" "}
-              <span>
-                <strong className="text-rose-600 dark:text-rose-400">
-                  -15 Poin
-                </strong>{" "}
-                setiap tugas telat (Strike). Hukuman berat.
-              </span>
-            </li>
-            <li className="flex items-center gap-2">
-              <TrendingUp size={12} className="text-blue-500" />{" "}
-              <span>
-                <strong className="text-slate-700 dark:text-slate-300">
-                  + Bonus
-                </strong>{" "}
-                dari tingkat persentase penyelesaian.
-              </span>
-            </li>
-          </ul>
         </div>
       </div>
 
@@ -545,7 +645,6 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                 <X size={20} />
               </button>
             </div>
-
             <div className="p-8 font-serif text-slate-800 dark:text-slate-200 leading-relaxed text-sm bg-white dark:bg-slate-950">
               <div className="mb-6 text-center border-b-2 border-slate-800 pb-4 dark:border-slate-200">
                 <h2 className="text-xl font-black uppercase tracking-widest">
@@ -555,15 +654,14 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                   Divisi Sumber Daya Manusia & Kepatuhan
                 </p>
               </div>
-
               <div className="space-y-4">
                 <p className="text-center font-bold underline">
                   SURAT PERINGATAN{" "}
                   {selectedSP.count >= 3
                     ? "III (TERAKHIR)"
                     : selectedSP.count === 2
-                    ? "II"
-                    : "I"}
+                      ? "II"
+                      : "I"}
                 </p>
                 <p>
                   Kepada Yth,
@@ -604,7 +702,6 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
                 </div>
               </div>
             </div>
-
             <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-slate-50 px-6 py-4 dark:border-slate-800 dark:bg-slate-900/50">
               <button
                 onClick={() => setSelectedSP(null)}
@@ -621,6 +718,16 @@ export function PerformanceTable({ tasks, today }: PerformanceTableProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* --- MODAL AMNESTY (BARU) --- */}
+      {amnestyTarget && (
+        <StrikeManagerModal
+          targetUser={amnestyTarget.name}
+          currentStrikes={amnestyTarget.currentStrikes}
+          onClose={() => setAmnestyTarget(null)}
+          onConfirm={handleAmnesty}
+        />
       )}
     </div>
   );

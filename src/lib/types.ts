@@ -9,7 +9,6 @@ export type Subtask = {
   isCompleted: boolean;
 };
 
-// Log untuk mencatat siapa yang mengubah apa
 export type HistoryLog = {
   id: string;
   user: string;
@@ -19,17 +18,16 @@ export type HistoryLog = {
   timestamp: string;
 };
 
-// --- TIPE DATA BARU: NOTIFIKASI ---
 export type NotificationType = "info" | "success" | "warning" | "danger";
 
 export type AppNotification = {
   id: string;
-  userId: string; // Notif ini untuk siapa? (e.g. "Raf")
-  message: string; // Pesan: "Tugas Logo Telat!"
-  type: NotificationType; // Warna notif (Merah/Kuning/Biru)
-  isRead: boolean; // Sudah dibaca belum?
+  userId: string;
+  message: string;
+  type: NotificationType;
+  isRead: boolean;
   timestamp: string;
-  relatedTaskId?: string; // Link ke tugas terkait (opsional)
+  relatedTaskId?: string;
 };
 
 export type Task = {
@@ -43,12 +41,12 @@ export type Task = {
   due: string;
   status: TaskStatus;
   output: string;
-  strikes: number; // Jumlah pelanggaran di tugas ini
+  strikes: number;
   subtasks: Subtask[];
   history: HistoryLog[];
+  finished_at?: string | null;
 };
 
-// Tambahkan "hq" di deretan ini
 export type Tab =
   | "my"
   | "timeline"
@@ -56,5 +54,4 @@ export type Tab =
   | "all"
   | "overdue"
   | "performance"
-  | "requests"
-  | "hq";
+  | "requests";

@@ -11,11 +11,12 @@ import {
   XCircle,
   MoreHorizontal,
   ArrowUpRight,
+  Lock,
 } from "lucide-react";
 import Link from "next/link";
 import { Task, TaskStatus } from "@/lib/types";
-import { ADMINS, SUPER_ADMIN } from "@/lib/data";
 import { useDialog } from "@/components/ui/DialogProvider";
+import { usePermission } from "@/hooks/usePermission";
 
 interface TaskCardProps {
   task: Task;
@@ -35,27 +36,24 @@ export function TaskCard({
   onDelete,
 }: TaskCardProps) {
   const dialog = useDialog();
-  const isSuperAdmin = currentUser === SUPER_ADMIN;
-  const isAdmin = ADMINS.includes(currentUser);
-  const isMember = task.members?.includes(currentUser);
-  const canUpdateStatus =
-    isSuperAdmin || isAdmin || task.pic === currentUser || isMember;
-  const canOpenModal = canUpdateStatus;
-  const canDelete = isSuperAdmin || isAdmin || task.pic === currentUser;
-  const isOverdue = task.status !== "done" && task.due < today;
 
+  // Panggil Hakim
+  const { canUpdateStatus, canEditTask, canDeleteTask, canMarkDone } =
+    usePermission(currentUser);
+
+  const isOverdue = task.status !== "done" && task.due < today;
   const totalSub = task.subtasks?.length || 0;
   const doneSub = task.subtasks?.filter((s) => s.isCompleted).length || 0;
+
+  // --- PERBAIKAN DISINI: Variabel ini sekarang dipakai di bawah ---
   const progressPercent =
     totalSub === 0 ? 0 : Math.round((doneSub / totalSub) * 100);
-  const isChecklistComplete = totalSub === 0 || doneSub === totalSub;
-  const canMarkDone = isChecklistComplete || isSuperAdmin;
 
-  const getProgressColor = () => {
-    if (progressPercent === 100) return "bg-emerald-500";
-    if (progressPercent > 50) return "bg-indigo-500";
-    return "bg-amber-500";
-  };
+  // Izin Spesifik
+  const allowUpdate = canUpdateStatus(task);
+  const allowEdit = canEditTask(task);
+  const allowDelete = canDeleteTask();
+  const allowMarkDone = canMarkDone();
 
   const getStatusStyle = (status: TaskStatus) => {
     switch (status) {
@@ -100,11 +98,13 @@ export function TaskCard({
   const statusStyle = getStatusStyle(task.status);
   const StatusIcon = statusStyle.icon;
   const getInitials = (name: string) => name.substring(0, 2).toUpperCase();
+
   const handleStatusChange = (nextStatus: TaskStatus) => {
-    if (nextStatus === "done" && !canMarkDone) {
+    if (nextStatus === "done" && !allowMarkDone) {
       void dialog.alert({
-        title: "Checklist Belum Lengkap",
-        message: "Selesaikan checklist dulu sebelum status Done.",
+        title: "Akses Ditolak",
+        message:
+          "Hanya Admin yang boleh memvalidasi tugas menjadi Done. Silakan ubah ke 'Review'.",
         tone: "danger",
       });
       return;
@@ -120,6 +120,14 @@ export function TaskCard({
           : "border-slate-200 dark:border-slate-800"
       }`}
     >
+      {task.status === "done" && !allowUpdate && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-slate-50/50 backdrop-blur-[1px] dark:bg-slate-900/50">
+          <div className="flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-bold text-emerald-600 shadow-sm dark:bg-slate-800">
+            <Lock size={12} /> Terkunci
+          </div>
+        </div>
+      )}
+
       <div>
         <div className="mb-4 flex items-center justify-between">
           <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:bg-slate-800 dark:text-slate-400">
@@ -198,12 +206,16 @@ export function TaskCard({
             <div className="mb-1 flex items-center justify-between text-[10px]">
               <span className="text-slate-400">Progress</span>
               <span className="font-bold text-slate-600 dark:text-slate-300">
+                {/* PERBAIKAN: Pakai variabel progressPercent disini */}
                 {progressPercent}% ({doneSub}/{totalSub})
               </span>
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
               <div
-                className={`h-full transition-all duration-500 ${getProgressColor()}`}
+                className={`h-full transition-all duration-500 ${
+                  progressPercent === 100 ? "bg-emerald-500" : "bg-indigo-500"
+                }`}
+                // PERBAIKAN: Pakai variabel progressPercent disini juga
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
@@ -221,7 +233,7 @@ export function TaskCard({
           <select
             value={task.status}
             onChange={(e) => handleStatusChange(e.target.value as TaskStatus)}
-            disabled={!canUpdateStatus}
+            disabled={!allowUpdate}
             className={`h-9 w-full appearance-none rounded-xl border pl-8 pr-8 text-xs font-bold uppercase tracking-wide transition-all focus:outline-none focus:ring-2 focus:ring-offset-1 dark:focus:ring-offset-slate-900 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer
               ${statusStyle.bg} ${statusStyle.borderColor} ${statusStyle.textColor}`}
           >
@@ -229,8 +241,12 @@ export function TaskCard({
             <option value="doing">Doing</option>
             <option value="blocked">Blocked</option>
             <option value="review">Review</option>
-            <option value="done" disabled={!canMarkDone && task.status !== "done"}>
-              Done
+            <option
+              value="done"
+              disabled={!allowMarkDone && task.status !== "done"}
+            >
+              Done{" "}
+              {!allowMarkDone && task.status !== "done" ? "(Admin Only)" : ""}
             </option>
           </select>
         </div>
@@ -243,7 +259,7 @@ export function TaskCard({
           >
             <ArrowUpRight size={16} />
           </Link>
-          {canOpenModal && (
+          {allowEdit && (
             <button
               onClick={() => onEdit(task)}
               className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-400 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600 transition-colors dark:border-slate-800 dark:hover:bg-indigo-900/20"
@@ -251,7 +267,7 @@ export function TaskCard({
               <Edit2 size={16} />
             </button>
           )}
-          {canDelete && (
+          {allowDelete && (
             <button
               onClick={() => onDelete(task.id)}
               className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 text-slate-400 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 transition-colors dark:border-slate-800 dark:hover:bg-rose-900/20"
@@ -270,5 +286,3 @@ export function TaskCard({
     </div>
   );
 }
-
-

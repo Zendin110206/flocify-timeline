@@ -11,10 +11,17 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { AlertTriangle, Info, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Info,
+  X,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type DialogTone = "default" | "danger";
+// --- UPDATE: Menambahkan tipe 'warning' dan 'success' ---
+type DialogTone = "default" | "danger" | "warning" | "success";
 
 type BaseDialogOptions = {
   title: string;
@@ -53,10 +60,12 @@ type DialogContextValue = {
 
 const DialogContext = createContext<DialogContextValue | null>(null);
 
+// --- UPDATE: Definisi Style untuk semua warna ---
 const TONE_STYLES = {
   default: {
     icon: Info,
-    iconBg: "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300",
+    iconBg:
+      "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-300",
     bar: "from-indigo-500/50 via-indigo-500/20 to-transparent",
     button: "bg-indigo-600 hover:bg-indigo-700",
     ring: "shadow-[0_0_24px_rgba(79,70,229,0.15)]",
@@ -67,6 +76,22 @@ const TONE_STYLES = {
     bar: "from-rose-500/60 via-rose-500/20 to-transparent",
     button: "bg-rose-600 hover:bg-rose-700",
     ring: "shadow-[0_0_24px_rgba(225,29,72,0.16)]",
+  },
+  warning: {
+    icon: AlertCircle,
+    iconBg:
+      "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300",
+    bar: "from-amber-500/60 via-amber-500/20 to-transparent",
+    button: "bg-amber-600 hover:bg-amber-700",
+    ring: "shadow-[0_0_24px_rgba(245,158,11,0.16)]",
+  },
+  success: {
+    icon: CheckCircle2,
+    iconBg:
+      "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300",
+    bar: "from-emerald-500/60 via-emerald-500/20 to-transparent",
+    button: "bg-emerald-600 hover:bg-emerald-700",
+    ring: "shadow-[0_0_24px_rgba(16,185,129,0.16)]",
   },
 };
 
@@ -109,7 +134,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           },
         });
       }),
-    [closeDialog]
+    [closeDialog],
   );
 
   const confirm = useCallback(
@@ -132,7 +157,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           },
         });
       }),
-    [closeDialog]
+    [closeDialog],
   );
 
   const prompt = useCallback(
@@ -160,12 +185,12 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           },
         });
       }),
-    [closeDialog]
+    [closeDialog],
   );
 
   const contextValue = useMemo(
     () => ({ alert, confirm, prompt }),
-    [alert, confirm, prompt]
+    [alert, confirm, prompt],
   );
 
   useEffect(() => {
@@ -193,7 +218,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           <div
             className={cn(
               "relative w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900",
-              toneStyles.ring
+              toneStyles.ring,
             )}
             role="dialog"
             aria-modal="true"
@@ -201,10 +226,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
             aria-describedby={messageId}
           >
             <div
-              className={cn(
-                "h-1 w-full bg-gradient-to-r",
-                toneStyles.bar
-              )}
+              className={cn("h-1 w-full bg-gradient-to-r", toneStyles.bar)}
             />
             <button
               onClick={dialog.onCancel}
@@ -218,7 +240,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
               <div
                 className={cn(
                   "flex h-11 w-11 items-center justify-center rounded-2xl",
-                  toneStyles.iconBg
+                  toneStyles.iconBg,
                 )}
               >
                 <ToneIcon size={20} />
@@ -273,7 +295,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
                 onClick={dialog.onConfirm}
                 className={cn(
                   "rounded-lg px-4 py-2 text-sm font-semibold text-white shadow-sm",
-                  toneStyles.button
+                  toneStyles.button,
                 )}
               >
                 {dialog.confirmText}
@@ -285,5 +307,3 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
     </DialogContext.Provider>
   );
 }
-
-
