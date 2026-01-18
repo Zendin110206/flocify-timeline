@@ -13,6 +13,7 @@ import {
   Archive,
   FileText,
   ArrowUpRight,
+  Wallet,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
@@ -47,7 +48,7 @@ export function Navbar({
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
 
   const myNotifs = notifications.filter(
-    (n) => n.userId === currentUser || n.userId === "All"
+    (n) => n.userId === currentUser || n.userId === "All",
   );
   const unreadCount = myNotifs.filter((n) => !n.isRead).length;
 
@@ -63,6 +64,10 @@ export function Navbar({
   const handleNotificationClick = (notif: AppNotification) => {
     onMarkRead(notif.id);
     setShowNotifDropdown(false);
+    if (notif.relatedFinanceId) {
+      router.push(`/finance?tx=${notif.relatedFinanceId}`);
+      return;
+    }
     if (notif.relatedTaskId) {
       router.push(`/task/${notif.relatedTaskId}`);
     }
@@ -88,6 +93,14 @@ export function Navbar({
 
         {/* KANAN */}
         <div className="flex items-center gap-2 sm:gap-3">
+          <Link
+            href="/finance"
+            title="Keuangan"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-indigo-600 dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Wallet size={20} />
+          </Link>
+
           <Link
             href="/report"
             title="Lihat Laporan"
@@ -165,8 +178,8 @@ export function Navbar({
                                 n.type === "danger"
                                   ? "bg-rose-500"
                                   : n.type === "warning"
-                                  ? "bg-amber-500"
-                                  : "bg-indigo-500"
+                                    ? "bg-amber-500"
+                                    : "bg-indigo-500"
                               }`}
                             />
                             <div className="flex-1">
@@ -189,7 +202,7 @@ export function Navbar({
                                   className="text-indigo-500 mt-1"
                                 />
                               )}
-                              {n.relatedTaskId && (
+                              {(n.relatedTaskId || n.relatedFinanceId) && (
                                 <ArrowUpRight
                                   size={14}
                                   className="mt-1 text-slate-400"
@@ -249,5 +262,3 @@ export function Navbar({
     </header>
   );
 }
-
-

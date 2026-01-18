@@ -29,7 +29,17 @@ export function formatDate(iso: string) {
   return d.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
 }
 
-// CONFIG WARNA STATUS (UPDATED: Kontras Tinggi di Dark Mode)
+// --- FUNGSI BARU: FORMAT RUPIAH ---
+export function formatRupiah(amount: number) {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0, // Gak usah pake ,00 di belakang biar bersih
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
+// CONFIG WARNA STATUS TASK (LAMA)
 export const STATUS_CONFIG: Record<
   TaskStatus,
   { label: string; style: string }
@@ -60,5 +70,3 @@ export const STATUS_CONFIG: Record<
       "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/30 dark:text-rose-400 dark:border-rose-800",
   },
 };
-
-

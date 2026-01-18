@@ -16,9 +16,17 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { Task } from "@/lib/types";
 
+type ArchiveRow = {
+  id: string;
+  title: string;
+  closed_by: string;
+  total_done: number;
+  created_at: string;
+  tasks_data: Task[] | null;
+};
+
 export default function ReportPage() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [archives, setArchives] = useState<any[]>([]);
+  const [archives, setArchives] = useState<ArchiveRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -30,7 +38,7 @@ export default function ReportPage() {
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (data) setArchives(data);
+      if (Array.isArray(data)) setArchives(data as ArchiveRow[]);
       setLoading(false);
     };
 
@@ -88,8 +96,7 @@ export default function ReportPage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-            {archives.map((arch: any) => {
+            {archives.map((arch) => {
               const tasksData = Array.isArray(arch.tasks_data)
                 ? arch.tasks_data
                 : [];

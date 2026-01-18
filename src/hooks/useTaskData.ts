@@ -19,6 +19,58 @@ const isSameLocalDay = (timestamp: string, dayISO: string) => {
 };
 const buildTaskTag = (taskId: string) => `[task:${taskId}]`;
 
+type TaskRow = {
+  id: string;
+  title: string;
+  division: Task["division"];
+  pic: string;
+  members: string[] | null;
+  priority: Task["priority"];
+  start_date: string;
+  due_date: string;
+  status: Task["status"];
+  output: string | null;
+  strikes: number | null;
+  subtasks: Task["subtasks"] | null;
+  history: Task["history"] | null;
+  finished_at?: string | null;
+};
+
+type NotificationRow = {
+  id: string;
+  user_id: string;
+  message: string;
+  type: AppNotification["type"];
+  is_read: boolean | null;
+  timestamp: string;
+};
+
+const mapTaskRow = (t: TaskRow): Task => ({
+  id: t.id,
+  title: t.title,
+  division: t.division,
+  pic: t.pic,
+  members: Array.isArray(t.members) ? t.members : [],
+  priority: t.priority,
+  start: t.start_date,
+  due: t.due_date,
+  status: t.status,
+  output: t.output ?? "",
+  strikes: t.strikes ?? 0,
+  subtasks: Array.isArray(t.subtasks) ? t.subtasks : [],
+  history: Array.isArray(t.history) ? t.history : [],
+  finished_at: t.finished_at ?? null,
+});
+
+const mapNotificationRow = (n: NotificationRow): AppNotification => ({
+  id: n.id,
+  userId: n.user_id,
+  message: n.message,
+  type: n.type,
+  isRead: n.is_read ?? false,
+  timestamp: n.timestamp,
+});
+
 export function useTaskData() {
   const dialog = useDialog();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -110,24 +162,10 @@ export function useTaskData() {
   const fetchData = useCallback(async () => {
     // Ambil Tasks
     const { data: dbTasks } = await supabase.from("tasks").select("*");
-    if (dbTasks) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mappedTasks: Task[] = dbTasks.map((t: any) => ({
-        id: t.id,
-        title: t.title,
-        division: t.division,
-        pic: t.pic,
-        members: t.members || [],
-        priority: t.priority,
-        start: t.start_date,
-        due: t.due_date,
-        status: t.status,
-        output: t.output || "",
-        strikes: t.strikes || 0,
-        subtasks: t.subtasks || [],
-          history: t.history || [],
-        finished_at: t.finished_at,
-      }));
+    if (Array.isArray(dbTasks)) {
+      const mappedTasks: Task[] = dbTasks.map((t) =>
+        mapTaskRow(t as TaskRow),
+      );
       setTasks(mappedTasks);
       // Jalankan razia setelah data terambil
       checkAutoStrike(mappedTasks);
@@ -139,16 +177,10 @@ export function useTaskData() {
       .select("*")
       .order("created_at", { ascending: false });
 
-    if (dbNotifs) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mappedNotifs: AppNotification[] = dbNotifs.map((n: any) => ({
-        id: n.id,
-        userId: n.user_id,
-        message: n.message,
-        type: n.type,
-        isRead: n.is_read,
-        timestamp: n.timestamp,
-      }));
+    if (Array.isArray(dbNotifs)) {
+      const mappedNotifs: AppNotification[] = dbNotifs.map((n) =>
+        mapNotificationRow(n as NotificationRow),
+      );
       setNotifications(mappedNotifs);
     }
 

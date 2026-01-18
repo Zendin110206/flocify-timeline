@@ -41,13 +41,35 @@ const parseRequestDetail = (detail: string) => {
   return { from, to };
 };
 const TASK_TAG_REGEX = /\s*\[task:([^\]]+)\]/;
+const FINANCE_TAG_REGEX = /\s*\[finance:([^\]]+)\]/;
 const extractTaskTag = (message: string) => {
   const match = message.match(TASK_TAG_REGEX);
   return match ? match[1] : null;
 };
-const stripTaskTag = (message: string) =>
-  message.replace(TASK_TAG_REGEX, "").trim();
+const extractFinanceTag = (message: string) => {
+  const match = message.match(FINANCE_TAG_REGEX);
+  return match ? match[1] : null;
+};
+const stripNotificationTags = (message: string) =>
+  message.replace(TASK_TAG_REGEX, "").replace(FINANCE_TAG_REGEX, "").trim();
 const buildTaskTag = (taskId: string) => `[task:${taskId}]`;
+
+type TaskPayload = {
+  id: string;
+  title: string;
+  division: Task["division"];
+  pic: string;
+  members: Task["members"];
+  priority: Task["priority"];
+  start_date: string;
+  due_date: string;
+  status: Task["status"];
+  output: string;
+  strikes: number;
+  subtasks: Task["subtasks"];
+  history: Task["history"];
+  finished_at: Task["finished_at"];
+};
 
 export default function FlocifyDashboard() {
   const dialog = useDialog();
@@ -134,18 +156,29 @@ export default function FlocifyDashboard() {
   // --- LOGIKA LINK NOTIFIKASI ---
   const linkedNotifications = useMemo(() => {
     return notifications.map((notif) => {
-      const taggedId = extractTaskTag(notif.message);
-      if (taggedId) {
+      const cleanMessage = stripNotificationTags(notif.message);
+      const financeTaggedId = extractFinanceTag(notif.message);
+      if (financeTaggedId) {
         return {
           ...notif,
-          relatedTaskId: taggedId,
-          message: stripTaskTag(notif.message),
+          relatedFinanceId: financeTaggedId,
+          message: cleanMessage,
         };
       }
-      const title = getQuotedText(notif.message);
-      if (!title || tasks.length === 0) return notif;
+      const taskTaggedId = extractTaskTag(notif.message);
+      if (taskTaggedId) {
+        return {
+          ...notif,
+          relatedTaskId: taskTaggedId,
+          message: cleanMessage,
+        };
+      }
+      const title = getQuotedText(cleanMessage);
+      if (!title || tasks.length === 0) return { ...notif, message: cleanMessage };
       const matchedTask = tasks.find((task) => task.title === title);
-      return matchedTask ? { ...notif, relatedTaskId: matchedTask.id } : notif;
+      return matchedTask
+        ? { ...notif, relatedTaskId: matchedTask.id, message: cleanMessage }
+        : { ...notif, message: cleanMessage };
     });
   }, [notifications, tasks]);
 
@@ -248,8 +281,7 @@ export default function FlocifyDashboard() {
     await supabase.from("notifications").delete().neq("id", "0");
     await supabase.from("archives").delete().neq("id", "0");
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const seedTasks = INITIAL_TASKS.map((t: any) => ({
+    const seedTasks = INITIAL_TASKS.map((t) => ({
       id: t.id,
       title: t.title,
       division: t.division,
@@ -264,8 +296,7 @@ export default function FlocifyDashboard() {
       subtasks: t.subtasks,
       history: t.history,
     }));
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const seedNotifs = INITIAL_NOTIFICATIONS.map((n: any) => ({
+    const seedNotifs = INITIAL_NOTIFICATIONS.map((n) => ({
       id: n.id,
       user_id: n.userId,
       message: n.message,
@@ -369,8 +400,7 @@ export default function FlocifyDashboard() {
       finishedAt = null;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dbPayload: any = {
+    const dbPayload: TaskPayload = {
       id: task.id,
       title: task.title,
       division: task.division,
