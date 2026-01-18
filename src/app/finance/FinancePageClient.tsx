@@ -34,7 +34,7 @@ import {
 } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import { useDialog } from "@/components/ui/DialogProvider";
-import { ADMINS } from "@/lib/data";
+import { ADMINS, FINANCE_APPROVERS } from "@/lib/data";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_OPTIONS: FinanceCategory[] = [
@@ -171,13 +171,21 @@ export default function FinancePageClient() {
     "transactions",
   );
   const canManage = ADMINS.includes(currentUser);
+  const isRestrictedView = !canManage;
+  const baseTransactions = useMemo(() => {
+    if (canManage) return transactions;
+    if (!currentUser) return [];
+    return transactions.filter((t) => t.requester === currentUser);
+  }, [canManage, currentUser, transactions]);
   const selectedTxId = searchParams.get("tx");
   const selectedId = selectedTxId ?? selectedTransactionId;
+  const transactionSource = canManage ? transactions : baseTransactions;
   const selectedTransaction = useMemo(() => {
     if (!selectedId) return null;
-    return transactions.find((tx) => tx.id === selectedId) ?? null;
-  }, [selectedId, transactions]);
-  const effectiveTab = selectedTxId ? "transactions" : activeTab;
+    return transactionSource.find((tx) => tx.id === selectedId) ?? null;
+  }, [selectedId, transactionSource]);
+  const effectiveTab =
+    selectedTxId || !canManage ? "transactions" : activeTab;
 
   const notifyUsers = async (
     userIds: string[],
@@ -201,7 +209,9 @@ export default function FinancePageClient() {
   };
 
   const notifyAdmins = async (message: string, type: NotificationType) => {
-    const targets = ADMINS.filter((admin) => admin !== currentUser);
+    const targets = FINANCE_APPROVERS.filter(
+      (approver) => approver !== currentUser,
+    );
     await notifyUsers(targets, message, type);
   };
 
@@ -545,7 +555,7 @@ export default function FinancePageClient() {
 
   const filteredTransactions = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return transactions.filter((t) => {
+    return baseTransactions.filter((t) => {
       const matchSearch =
         query.length === 0 ||
         t.title.toLowerCase().includes(query) ||
@@ -558,13 +568,7 @@ export default function FinancePageClient() {
         filterCategory === "all" || t.category === filterCategory;
       return matchSearch && matchStatus && matchType && matchCategory;
     });
-  }, [
-    transactions,
-    searchQuery,
-    filterStatus,
-    filterType,
-    filterCategory,
-  ]);
+  }, [baseTransactions, searchQuery, filterStatus, filterType, filterCategory]);
 
   const actionCount = useMemo(
     () =>
@@ -581,22 +585,32 @@ export default function FinancePageClient() {
     [transactions],
   );
 
-  const tabs = [
-    {
-      id: "transactions",
-      label: "Transaksi",
-      description: "Kelola approval & settlement",
-      icon: ListChecks,
-      badge: actionCount > 0 ? `${actionCount} perlu` : "",
-    },
-    {
-      id: "insights",
-      label: "Insight & Analitik",
-      description: "Tren pengeluaran & approval",
-      icon: BarChart3,
-      badge: "",
-    },
-  ] as const;
+  const tabs = canManage
+    ? ([
+        {
+          id: "transactions",
+          label: "Transaksi",
+          description: "Kelola approval & settlement",
+          icon: ListChecks,
+          badge: actionCount > 0 ? `${actionCount} perlu` : "",
+        },
+        {
+          id: "insights",
+          label: "Insight & Analitik",
+          description: "Tren pengeluaran & approval",
+          icon: BarChart3,
+          badge: "",
+        },
+      ] as const)
+    : ([
+        {
+          id: "transactions",
+          label: "Transaksi",
+          description: "Daftar transaksi kamu",
+          icon: ListChecks,
+          badge: "",
+        },
+      ] as const);
 
   if (isLoading) {
     return (
@@ -688,6 +702,26 @@ export default function FinancePageClient() {
             {effectiveTab === "transactions" ? (
               <>
                 <FinanceStats balance={balance} transactions={transactions} />
+
+                {isRestrictedView && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800 shadow-sm dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200 sm:p-5">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-200">
+                        <Info size={16} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold">Mode Terbatas</p>
+                        <p className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/80">
+                          Kamu hanya melihat transaksi yang kamu ajukan. Saldo
+                          dan ringkasan di atas adalah agregat global tim.
+                          Kalau daftar kosong, pastikan kamu sudah login dari
+                          Dashboard atau memang belum ada transaksi atas nama
+                          kamu.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/80 sm:p-5">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -836,7 +870,8 @@ export default function FinancePageClient() {
                   <div className="mt-4 flex flex-col gap-2 text-xs text-slate-500 dark:text-slate-400 sm:flex-row sm:items-center sm:justify-between">
                     <span>
                       Menampilkan {filteredTransactions.length} dari{" "}
-                      {transactions.length} transaksi
+                      {baseTransactions.length}{" "}
+                      {canManage ? "transaksi" : "transaksi kamu"}
                     </span>
                     {canManage ? (
                       <span className="w-fit rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">

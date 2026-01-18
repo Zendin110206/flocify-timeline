@@ -8,6 +8,8 @@ export const PEOPLE = ["Zaenal", "Rafhan", "Erpan", "Uki", "Hatta", "Inas"];
 // Role & akses
 export const SUPER_ADMIN = "Zaenal";
 export const ADMINS = [SUPER_ADMIN, "Hatta", "Inas"];
+export const REVIEW_APPROVERS = [SUPER_ADMIN, "Hatta"];
+export const FINANCE_APPROVERS = ["Hatta", "Inas"];
 
 // Divisi (Bisa dianggap Role: Branding=Hustler/Hipster, Web=Hacker, dll)
 export const DIVISIONS: Division[] = [

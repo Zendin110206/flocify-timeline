@@ -59,7 +59,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       }, 2500);
     } else {
       const errorMsg = isMaster
-        ? "CRITICAL FAILURE: Master Seal Invalid!"
+        ? "Eitssss ga boleh yaaaaaaaaa, meskipun bisa sih inspect web, karena hardcoded"
         : "ih tolol dah, masa nim sendiri lupa.";
 
       setError(errorMsg);
@@ -76,8 +76,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     status === "success"
       ? GIF_SUCCESS
       : status === "error"
-      ? GIF_ERROR
-      : GIF_NORMAL;
+        ? GIF_ERROR
+        : GIF_NORMAL;
 
   // --- THEME CONFIGURATION (Dynamic Style) ---
   const theme = isMaster
@@ -166,10 +166,10 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               status === "error"
                 ? "border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.6)]"
                 : status === "success"
-                ? "border-green-400 shadow-[0_0_30px_rgba(74,222,128,0.6)]"
-                : isMaster
-                ? "border-yellow-400 shadow-[0_0_40px_rgba(255,215,0,0.5)]"
-                : "border-white shadow-xl"
+                  ? "border-green-400 shadow-[0_0_30px_rgba(74,222,128,0.6)]"
+                  : isMaster
+                    ? "border-yellow-400 shadow-[0_0_40px_rgba(255,215,0,0.5)]"
+                    : "border-white shadow-xl"
             }`}
           >
             {/* Menggunakan Next.js Image Component */}

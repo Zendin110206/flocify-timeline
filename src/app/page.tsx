@@ -5,7 +5,12 @@ import React, { useState, useEffect, useMemo } from "react";
 import { Task, Tab, Division, TaskStatus } from "@/lib/types";
 import { todayISO, daysBetween, STATUS_CONFIG } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
-import { INITIAL_TASKS, INITIAL_NOTIFICATIONS, SUPER_ADMIN } from "@/lib/data";
+import {
+  INITIAL_TASKS,
+  INITIAL_NOTIFICATIONS,
+  REVIEW_APPROVERS,
+  SUPER_ADMIN,
+} from "@/lib/data";
 
 // Hooks Baru
 import { useTaskData } from "@/hooks/useTaskData";
@@ -370,15 +375,21 @@ export default function FlocifyDashboard() {
     }
 
     if (status === "review") {
-      await supabase.from("notifications").insert({
-        id: generateId("n-rev"),
-        user_id: "Zaenal",
-        message: `🔍 REVIEW: ${me} -> "${task.title}". ${buildTaskTag(
-          task.id,
-        )}`,
-        type: "warning",
-        timestamp,
-      });
+      const recipients = REVIEW_APPROVERS.filter((user) => user !== me);
+      if (recipients.length > 0) {
+        await supabase.from("notifications").insert(
+          recipients.map((userId) => ({
+            id: generateId("n-rev"),
+            user_id: userId,
+            message: `🔍 REVIEW: ${me} -> "${task.title}". ${buildTaskTag(
+              task.id,
+            )}`,
+            type: "warning",
+            is_read: false,
+            timestamp,
+          })),
+        );
+      }
     }
   };
 
