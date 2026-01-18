@@ -1,3 +1,4 @@
+// src/app/finance/page.tsx
 import { Suspense } from "react";
 import FinancePageClient from "./FinancePageClient";
 

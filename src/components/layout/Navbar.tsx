@@ -14,6 +14,7 @@ import {
   FileText,
   ArrowUpRight,
   Wallet,
+  Pencil,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import Link from "next/link";
@@ -99,6 +100,14 @@ export function Navbar({
             className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-indigo-600 dark:text-slate-400 dark:hover:bg-slate-800"
           >
             <Wallet size={20} />
+          </Link>
+
+          <Link
+            href="/whiteboard"
+            title="Whiteboard"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-indigo-600 dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Pencil size={20} />
           </Link>
 
           <Link
