@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   ImageDown,
   Info,
@@ -22,6 +23,8 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { useDialog } from "@/components/ui/DialogProvider";
+import { PEOPLE } from "@/lib/data";
+import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import {
   DEFAULT_STICKY_SIZE,
@@ -71,6 +74,110 @@ import {
  * 2) Drawing disappearing / object stuck 0: prevent shapesRef overwrite on requestRender changes
  */
 
+const BOARD_ID = "team";
+const WHITEBOARD_USER_KEY = "flocify-whiteboard-user";
+const WHITEBOARD_CLIENT_KEY = "flocify-whiteboard-client";
+const CURSOR_THROTTLE_MS = 40;
+const CURSOR_TTL_MS = 5000;
+const SHAPE_BROADCAST_MS = 40;
+
+type Collaborator = {
+  clientId: string;
+  name: string;
+  color: string;
+};
+
+type RemoteCursor = {
+  clientId: string;
+  name: string;
+  color: string;
+  point: Point;
+  updatedAt: number;
+};
+
+type ShapeBroadcastPayload = {
+  clientId: string;
+  seq: number;
+  upserts: Shape[];
+  removes: string[];
+};
+
+type PresencePayload = {
+  user?: string;
+  color?: string;
+  clientId?: string;
+};
+
+const resolveStoredUser = () => {
+  if (typeof window === "undefined") return PEOPLE[0] ?? "SYSTEM";
+  const loginUser = localStorage.getItem("flocify-user");
+  if (loginUser && PEOPLE.includes(loginUser)) return loginUser;
+  const stored = localStorage.getItem(WHITEBOARD_USER_KEY);
+  if (stored && PEOPLE.includes(stored)) return stored;
+  return PEOPLE[0] ?? "SYSTEM";
+};
+
+const resolveClientId = () => {
+  if (typeof window === "undefined") return generateId("wb-client");
+  const stored = localStorage.getItem(WHITEBOARD_CLIENT_KEY);
+  if (stored) return stored;
+  const next = generateId("wb-client");
+  localStorage.setItem(WHITEBOARD_CLIENT_KEY, next);
+  return next;
+};
+
+const getUserColor = (name: string) => {
+  const idx = PEOPLE.indexOf(name);
+  if (idx >= 0) return STROKE_COLORS[idx % STROKE_COLORS.length];
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return STROKE_COLORS[hash % STROKE_COLORS.length];
+};
+
+const diffShapes = (prev: Shape[], next: Shape[]) => {
+  if (prev === next) return { upserts: [], removes: [] };
+  const prevMap = new Map(prev.map((shape) => [shape.id, shape]));
+  const nextMap = new Map(next.map((shape) => [shape.id, shape]));
+  const upserts: Shape[] = [];
+  const removes: string[] = [];
+
+  for (const [id, shape] of nextMap) {
+    const prevShape = prevMap.get(id);
+    if (!prevShape || prevShape !== shape) upserts.push(shape);
+  }
+
+  for (const id of prevMap.keys()) {
+    if (!nextMap.has(id)) removes.push(id);
+  }
+
+  return { upserts, removes };
+};
+
+const mergeShapes = (current: Shape[], upserts: Shape[], removes: string[]) => {
+  if (upserts.length === 0 && removes.length === 0) return current;
+  const removeSet = new Set(removes);
+  const base = removeSet.size
+    ? current.filter((shape) => !removeSet.has(shape.id))
+    : [...current];
+
+  if (upserts.length === 0) return base;
+
+  const indexMap = new Map(base.map((shape, index) => [shape.id, index]));
+  for (const shape of upserts) {
+    if (removeSet.has(shape.id)) continue;
+    const existingIndex = indexMap.get(shape.id);
+    if (existingIndex === undefined) {
+      indexMap.set(shape.id, base.length);
+      base.push(shape);
+    } else {
+      base[existingIndex] = shape;
+    }
+  }
+  return base;
+};
+
 function safeParseBoard(raw: string): StoredBoard | null {
   try {
     const parsed = JSON.parse(raw) as StoredBoard;
@@ -90,6 +197,15 @@ export default function WhiteboardCanvas({
   className?: string;
 }) {
   const dialog = useDialog();
+  const [currentUser, setCurrentUser] = useState(resolveStoredUser);
+  const userColor = useMemo(() => getUserColor(currentUser), [currentUser]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [remoteCursors, setRemoteCursors] = useState<
+    Record<string, RemoteCursor>
+  >({});
+  const [syncStatus, setSyncStatus] = useState<"connecting" | "live" | "error">(
+    "connecting",
+  );
 
   const initialStoredBoard = useMemo(() => {
     if (typeof window === "undefined") return null;
@@ -132,6 +248,22 @@ export default function WhiteboardCanvas({
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
+  const clientIdRef = useRef(resolveClientId());
+  const channelRef = useRef<RealtimeChannel | null>(null);
+  const hasRemoteLoadedRef = useRef(false);
+  const suppressBroadcastRef = useRef(false);
+  const skipBroadcastOnceRef = useRef(true);
+  const skipRemoteSyncRef = useRef(false);
+  const pendingBroadcastRef = useRef<{
+    upserts: Map<string, Shape>;
+    removes: Set<string>;
+  } | null>(null);
+  const broadcastTimerRef = useRef<number | null>(null);
+  const lastCursorSentRef = useRef(0);
+  const lastBroadcastShapesRef = useRef<Shape[]>(board.shapes);
+  const shapeSeqRef = useRef(0);
+  const lastSeqByClientRef = useRef<Record<string, number>>({});
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -189,6 +321,12 @@ export default function WhiteboardCanvas({
     });
   }, [canvasSize.height, canvasSize.width, hoverId, selectedId, showGrid]);
 
+  const requestRenderRef = useRef(requestRender);
+
+  useEffect(() => {
+    requestRenderRef.current = requestRender;
+  }, [requestRender]);
+
   /**
    * ✅ FIX #2:
    * Sinkronisasi refs TIDAK boleh tergantung requestRender.
@@ -220,13 +358,300 @@ export default function WhiteboardCanvas({
     };
   }, [resetTransientState]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(WHITEBOARD_USER_KEY, currentUser);
+  }, [currentUser]);
+
+  const queueShapeBroadcast = useCallback(
+    (diff: { upserts: Shape[]; removes: string[] }) => {
+      if (!hasRemoteLoadedRef.current) return;
+      const channel = channelRef.current;
+      if (!channel) return;
+      if (diff.upserts.length === 0 && diff.removes.length === 0) return;
+
+      const pending =
+        pendingBroadcastRef.current ?? {
+          upserts: new Map<string, Shape>(),
+          removes: new Set<string>(),
+        };
+
+      diff.upserts.forEach((shape) => {
+        pending.upserts.set(shape.id, shape);
+        pending.removes.delete(shape.id);
+      });
+      diff.removes.forEach((id) => {
+        pending.removes.add(id);
+        pending.upserts.delete(id);
+      });
+
+      pendingBroadcastRef.current = pending;
+
+      if (broadcastTimerRef.current != null) return;
+      broadcastTimerRef.current = window.setTimeout(() => {
+        const queued = pendingBroadcastRef.current;
+        pendingBroadcastRef.current = null;
+        broadcastTimerRef.current = null;
+        if (!queued) return;
+        shapeSeqRef.current += 1;
+        const payload: ShapeBroadcastPayload = {
+          clientId: clientIdRef.current,
+          seq: shapeSeqRef.current,
+          upserts: Array.from(queued.upserts.values()),
+          removes: Array.from(queued.removes.values()),
+        };
+        channelRef.current?.send({
+          type: "broadcast",
+          event: "shapes",
+          payload,
+        });
+      }, SHAPE_BROADCAST_MS);
+    },
+    [],
+  );
+
   const setShapesImmediate = useCallback(
     (nextShapes: Shape[]) => {
+      const prevShapes = shapesRef.current;
       shapesRef.current = nextShapes;
       requestRender();
+      if (suppressBroadcastRef.current) return;
+      queueShapeBroadcast(diffShapes(prevShapes, nextShapes));
     },
-    [requestRender],
+    [queueShapeBroadcast, requestRender],
   );
+
+  useEffect(() => {
+    if (skipBroadcastOnceRef.current) {
+      skipBroadcastOnceRef.current = false;
+      lastBroadcastShapesRef.current = board.shapes;
+      return;
+    }
+    const diff = diffShapes(lastBroadcastShapesRef.current, board.shapes);
+    lastBroadcastShapesRef.current = board.shapes;
+    queueShapeBroadcast(diff);
+  }, [board.shapes, queueShapeBroadcast]);
+
+  const applyRemotePatch = useCallback((payload: ShapeBroadcastPayload) => {
+    if (!payload || payload.clientId === clientIdRef.current) return;
+    const hasSeq = typeof payload.seq === "number";
+    const incomingSeq = hasSeq ? payload.seq : 0;
+    const lastSeq = lastSeqByClientRef.current[payload.clientId] ?? -1;
+    if (hasSeq) {
+      if (incomingSeq <= lastSeq) return;
+      lastSeqByClientRef.current[payload.clientId] = incomingSeq;
+    }
+    const upserts = Array.isArray(payload.upserts) ? payload.upserts : [];
+    const removes = Array.isArray(payload.removes) ? payload.removes : [];
+    if (upserts.length === 0 && removes.length === 0) return;
+
+    const nextShapes = mergeShapes(shapesRef.current, upserts, removes);
+    if (nextShapes === shapesRef.current) return;
+
+    suppressBroadcastRef.current = true;
+    skipBroadcastOnceRef.current = true;
+    skipRemoteSyncRef.current = true;
+    shapesRef.current = nextShapes;
+    dispatch({ type: "replace", shapes: nextShapes });
+    requestRenderRef.current();
+    suppressBroadcastRef.current = false;
+
+    setSelectedId((prev) =>
+      prev && nextShapes.some((shape) => shape.id === prev) ? prev : null,
+    );
+    setHoverId((prev) =>
+      prev && nextShapes.some((shape) => shape.id === prev) ? prev : null,
+    );
+  }, []);
+
+  const applyRemoteSnapshot = useCallback((nextShapes: Shape[]) => {
+    suppressBroadcastRef.current = true;
+    skipBroadcastOnceRef.current = true;
+    skipRemoteSyncRef.current = true;
+    shapesRef.current = nextShapes;
+    dispatch({ type: "replace", shapes: nextShapes });
+    requestRenderRef.current();
+    suppressBroadcastRef.current = false;
+    setSelectedId(null);
+    setHoverId(null);
+  }, []);
+
+  const updatePresence = useCallback(() => {
+    const channel = channelRef.current;
+    if (!channel) return;
+    const state = channel.presenceState() as Record<string, PresencePayload[]>;
+    const unique = new Map<string, Collaborator>();
+    Object.values(state).forEach((entries) => {
+      entries.forEach((entry) => {
+        const name = typeof entry.user === "string" ? entry.user : "Unknown";
+        const color =
+          typeof entry.color === "string" && entry.color
+            ? entry.color
+            : getUserColor(name);
+        const clientId =
+          typeof entry.clientId === "string" ? entry.clientId : "";
+        if (!clientId) return;
+        unique.set(clientId, { clientId, name, color });
+      });
+    });
+    setCollaborators(Array.from(unique.values()));
+  }, []);
+
+  const trackPresence = useCallback(() => {
+    const channel = channelRef.current;
+    if (!channel) return;
+    channel.track({
+      user: currentUser,
+      color: userColor,
+      clientId: clientIdRef.current,
+    });
+  }, [currentUser, userColor]);
+
+  const broadcastCursor = useCallback(
+    (point: Point | null) => {
+      const channel = channelRef.current;
+      if (!channel) return;
+      if (point) {
+        const now = performance.now();
+        if (now - lastCursorSentRef.current < CURSOR_THROTTLE_MS) return;
+        lastCursorSentRef.current = now;
+      }
+      channel.send({
+        type: "broadcast",
+        event: "cursor",
+        payload: {
+          clientId: clientIdRef.current,
+          user: currentUser,
+          color: userColor,
+          point,
+        },
+      });
+    },
+    [currentUser, userColor],
+  );
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadBoard = async () => {
+      try {
+        const { data } = await supabase
+          .from("whiteboard_boards")
+          .select("shapes, updated_at")
+          .eq("id", BOARD_ID)
+          .maybeSingle();
+
+        if (!isActive) return;
+        if (data && Array.isArray(data.shapes)) {
+          applyRemoteSnapshot(data.shapes as Shape[]);
+          if (data.updated_at) {
+            setLastSavedAt(new Date(data.updated_at));
+          }
+        }
+      } finally {
+        if (isActive) hasRemoteLoadedRef.current = true;
+      }
+    };
+
+    loadBoard();
+    return () => {
+      isActive = false;
+    };
+  }, [applyRemoteSnapshot]);
+
+  useEffect(() => {
+    setSyncStatus("connecting");
+    const channel = supabase.channel(`whiteboard:${BOARD_ID}`, {
+      config: {
+        presence: { key: clientIdRef.current },
+        broadcast: { self: false },
+      },
+    });
+
+    channelRef.current = channel;
+
+    channel.on("broadcast", { event: "shapes" }, ({ payload }) => {
+      applyRemotePatch(payload as ShapeBroadcastPayload);
+    });
+
+    channel.on("broadcast", { event: "cursor" }, ({ payload }) => {
+      const data = payload as {
+        clientId?: string;
+        user?: string;
+        color?: string;
+        point?: Point | null;
+      };
+      if (!data?.clientId || data.clientId === clientIdRef.current) return;
+      if (!data.point) {
+        setRemoteCursors((prev) => {
+          const next = { ...prev };
+          delete next[data.clientId as string];
+          return next;
+        });
+        return;
+      }
+      const name = typeof data.user === "string" ? data.user : "Unknown";
+      const color =
+        typeof data.color === "string" && data.color
+          ? data.color
+          : getUserColor(name);
+      setRemoteCursors((prev) => ({
+        ...prev,
+        [data.clientId as string]: {
+          clientId: data.clientId as string,
+          name,
+          color,
+          point: data.point as Point,
+          updatedAt: Date.now(),
+        },
+      }));
+    });
+
+    channel.on("presence", { event: "sync" }, updatePresence);
+    channel.on("presence", { event: "join" }, updatePresence);
+    channel.on("presence", { event: "leave" }, updatePresence);
+
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        setSyncStatus("live");
+        channel.track({
+          user: currentUser,
+          color: userColor,
+          clientId: clientIdRef.current,
+        });
+        updatePresence();
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setSyncStatus("error");
+      }
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+      channelRef.current = null;
+    };
+  }, [applyRemotePatch, currentUser, updatePresence, userColor]);
+
+  useEffect(() => {
+    if (syncStatus !== "live") return;
+    trackPresence();
+  }, [syncStatus, trackPresence]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setRemoteCursors((prev) => {
+        const next: Record<string, RemoteCursor> = {};
+        Object.values(prev).forEach((cursor) => {
+          if (now - cursor.updatedAt < CURSOR_TTL_MS) {
+            next[cursor.clientId] = cursor;
+          }
+        });
+        return next;
+      });
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const beginDraft = useCallback(() => {
     if (!draftSnapshotRef.current) {
@@ -250,6 +675,8 @@ export default function WhiteboardCanvas({
 
       const finalShapes = nextShapes ?? shapesRef.current;
       shapesRef.current = finalShapes;
+      skipBroadcastOnceRef.current = false;
+      skipRemoteSyncRef.current = false;
       dispatch({ type: "commit", shapes: finalShapes, before });
       requestRender();
     },
@@ -417,6 +844,8 @@ export default function WhiteboardCanvas({
           return;
         }
         shapesRef.current = nextShapes;
+        skipBroadcastOnceRef.current = false;
+        skipRemoteSyncRef.current = false;
         dispatch({ type: "commit", shapes: nextShapes, before });
         requestRender();
         setEditing(null);
@@ -480,6 +909,8 @@ export default function WhiteboardCanvas({
 
       // Commit as one history action
       shapesRef.current = nextShapes;
+      skipBroadcastOnceRef.current = false;
+      skipRemoteSyncRef.current = false;
       dispatch({ type: "commit", shapes: nextShapes, before });
       requestRender();
       setEditing(null);
@@ -496,6 +927,8 @@ export default function WhiteboardCanvas({
       return;
     }
     shapesRef.current = nextShapes;
+    skipBroadcastOnceRef.current = false;
+    skipRemoteSyncRef.current = false;
     dispatch({ type: "commit", shapes: nextShapes, before });
     requestRender();
     setSelectedId(null);
@@ -503,6 +936,8 @@ export default function WhiteboardCanvas({
 
   const handleUndo = useCallback(() => {
     if (board.past.length === 0) return;
+    skipBroadcastOnceRef.current = false;
+    skipRemoteSyncRef.current = false;
     dispatch({ type: "undo" });
     setSelectedId(null);
     setHoverId(null);
@@ -510,6 +945,8 @@ export default function WhiteboardCanvas({
 
   const handleRedo = useCallback(() => {
     if (board.future.length === 0) return;
+    skipBroadcastOnceRef.current = false;
+    skipRemoteSyncRef.current = false;
     dispatch({ type: "redo" });
     setSelectedId(null);
     setHoverId(null);
@@ -533,6 +970,8 @@ export default function WhiteboardCanvas({
     if (!confirmed) return;
     const before = shapesRef.current;
     shapesRef.current = [];
+    skipBroadcastOnceRef.current = false;
+    skipRemoteSyncRef.current = false;
     dispatch({ type: "commit", shapes: [], before });
     requestRender();
     setSelectedId(null);
@@ -675,6 +1114,36 @@ export default function WhiteboardCanvas({
     }, 450);
     return () => window.clearTimeout(timer);
   }, [board.shapes, viewport]);
+
+  // Sync to Supabase (debounced)
+  useEffect(() => {
+    if (!hasRemoteLoadedRef.current) return;
+    const timer = window.setTimeout(async () => {
+      if (skipRemoteSyncRef.current) {
+        skipRemoteSyncRef.current = false;
+        return;
+      }
+      const updatedAt = new Date().toISOString();
+      const { error } = await supabase
+        .from("whiteboard_boards")
+        .upsert(
+          {
+            id: BOARD_ID,
+            shapes: board.shapes,
+            updated_at: updatedAt,
+            updated_by: currentUser,
+          },
+          { onConflict: "id" },
+        );
+      if (error) {
+        setSyncStatus("error");
+        return;
+      }
+      setSyncStatus("live");
+      setLastSavedAt(new Date(updatedAt));
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [board.shapes, currentUser]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -836,6 +1305,12 @@ export default function WhiteboardCanvas({
       minute: "2-digit",
     });
   }, [lastSavedAt]);
+
+  const syncLabel = useMemo(() => {
+    if (syncStatus === "live") return "Live";
+    if (syncStatus === "error") return "Error";
+    return "Menghubungkan";
+  }, [syncStatus]);
 
   const iconButtonClass =
     "flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700";
@@ -1037,6 +1512,7 @@ export default function WhiteboardCanvas({
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       const screenPoint = getScreenPoint(event);
       const worldPoint = screenToWorld(screenPoint, viewportRef.current);
+      broadcastCursor(worldPoint);
 
       // pan
       if (panRef.current) {
@@ -1124,6 +1600,7 @@ export default function WhiteboardCanvas({
       }
     },
     [
+      broadcastCursor,
       editing,
       effectiveTool,
       eraseAlong,
@@ -1154,16 +1631,18 @@ export default function WhiteboardCanvas({
       }
       panRef.current = null;
       setIsPanning(false);
+      broadcastCursor(null);
       finalizeInteraction();
     },
-    [finalizeInteraction],
+    [broadcastCursor, finalizeInteraction],
   );
 
   const handlePointerLeave = useCallback(() => {
     panRef.current = null;
     setIsPanning(false);
+    broadcastCursor(null);
     finalizeInteraction();
-  }, [finalizeInteraction]);
+  }, [broadcastCursor, finalizeInteraction]);
 
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1218,7 +1697,7 @@ export default function WhiteboardCanvas({
               Team Whiteboard
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Autosave lokal • Zoom & pan stabil • Export PNG/PDF
+              Realtime team sync • Autosave lokal • Export PNG/PDF
             </p>
           </div>
         </div>
@@ -1359,6 +1838,34 @@ export default function WhiteboardCanvas({
                 style={editingStyle}
               />
             )}
+
+            {Object.values(remoteCursors).map((cursor) => {
+              const screen = worldToScreen(cursor.point, viewport);
+              return (
+                <div
+                  key={cursor.clientId}
+                  className="pointer-events-none absolute left-0 top-0 z-20"
+                  style={{
+                    transform: `translate(${screen.x + 8}px, ${
+                      screen.y + 8
+                    }px)`,
+                  }}
+                >
+                  <div className="flex flex-col items-start gap-1">
+                    <span
+                      className="block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: cursor.color }}
+                    />
+                    <span
+                      className="rounded-md px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+                      style={{ backgroundColor: cursor.color }}
+                    >
+                      {cursor.name}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           {/* STATUS (bottom left) */}
@@ -1402,6 +1909,70 @@ export default function WhiteboardCanvas({
         {/* RIGHT PANEL */}
         <aside className="w-64 border-l border-slate-200 bg-white/90 p-4 dark:border-slate-800 dark:bg-slate-900/80">
           <div className="space-y-5">
+            <div>
+              <p className={panelTitleClass}>Collab</p>
+              <div className="mt-2 space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    Status
+                  </span>
+                  <span
+                    className={cn(
+                      "flex items-center gap-2 font-semibold",
+                      syncStatus === "live"
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : syncStatus === "error"
+                          ? "text-rose-600 dark:text-rose-400"
+                          : "text-slate-500 dark:text-slate-400",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "h-2 w-2 rounded-full",
+                        syncStatus === "live"
+                          ? "bg-emerald-400"
+                          : syncStatus === "error"
+                            ? "bg-rose-400"
+                            : "bg-slate-400",
+                      )}
+                    />
+                    {syncLabel}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-1">
+                  {collaborators.length > 0 ? (
+                    collaborators.map((collab) => (
+                      <span
+                        key={collab.clientId}
+                        className="rounded-full px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+                        style={{ backgroundColor: collab.color }}
+                      >
+                        {collab.name}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500">
+                      Belum ada
+                    </span>
+                  )}
+                </div>
+
+                <label className={panelTitleClass}>Kamu</label>
+                <select
+                  value={currentUser}
+                  onChange={(event) => setCurrentUser(event.target.value)}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm outline-none focus:border-indigo-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  {PEOPLE.map((person) => (
+                    <option key={person} value={person}>
+                      {person}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             <div>
               <p className={panelTitleClass}>Stroke</p>
               <div className="mt-2 flex flex-wrap gap-2">
