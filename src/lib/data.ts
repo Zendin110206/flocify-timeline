@@ -1,6 +1,13 @@
 // src/lib/data.ts
 
-import { Task, Division, AppNotification } from "./types";
+import {
+  Task,
+  Division,
+  AppNotification,
+  Initiative,
+  OKR,
+  Milestone,
+} from "./types";
 
 // Anggota Tim Real
 export const PEOPLE = ["Zaenal", "Rafhan", "Erpan", "Uki", "Hatta", "Inas"];
@@ -18,6 +25,85 @@ export const DIVISIONS: Division[] = [
   "Komunitas",
   "Web",
   "Keuangan",
+];
+
+// Strategy Layer (Initiative / OKR / Milestone)
+export const INITIATIVES: Initiative[] = [
+  {
+    id: "init-mvp",
+    title: "MVP Validation & Launch",
+    owner: "Zaenal",
+    start: "2026-01-08",
+    due: "2026-01-21",
+    status: "on_track",
+    summary: "Deliver MVP + proof of workflow adoption.",
+  },
+  {
+    id: "init-growth",
+    title: "Community Growth & Content Engine",
+    owner: "Uki",
+    start: "2026-01-10",
+    due: "2026-01-25",
+    status: "at_risk",
+    summary: "Validate demand + build repeatable content cadence.",
+  },
+  {
+    id: "init-finance",
+    title: "Operational Finance Hygiene",
+    owner: "Inas",
+    start: "2026-01-09",
+    due: "2026-01-18",
+    status: "on_track",
+    summary: "Make spending traceable and approvals consistent.",
+  },
+];
+
+export const OKRS: OKR[] = [
+  {
+    id: "okr-mvp-1",
+    initiativeId: "init-mvp",
+    title: "Objective: MVP ready for pilot",
+    owner: "Zaenal",
+    target: "KR: 1 MVP live + 1 sprint closed",
+  },
+  {
+    id: "okr-growth-1",
+    initiativeId: "init-growth",
+    title: "Objective: Validate community demand",
+    owner: "Erpan",
+    target: "KR: 2 interviews + 1 content batch",
+  },
+  {
+    id: "okr-fin-1",
+    initiativeId: "init-finance",
+    title: "Objective: Finance workflow online",
+    owner: "Inas",
+    target: "KR: Cashflow + RAB baseline",
+  },
+];
+
+export const MILESTONES: Milestone[] = [
+  {
+    id: "ms-mvp-1",
+    initiativeId: "init-mvp",
+    title: "Core dashboard shipped",
+    due: "2026-01-13",
+    status: "in_progress",
+  },
+  {
+    id: "ms-growth-1",
+    initiativeId: "init-growth",
+    title: "Community interviews completed",
+    due: "2026-01-12",
+    status: "in_progress",
+  },
+  {
+    id: "ms-fin-1",
+    initiativeId: "init-finance",
+    title: "Cashflow & RAB baseline",
+    due: "2026-01-14",
+    status: "planned",
+  },
 ];
 
 // Notifikasi Awal: Sprint dimulai Jumat kemarin
@@ -57,6 +143,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-09", // Mulai Jumat
     due: "2026-01-13", // Deadline Selasa (Masih Aman)
     status: "doing",
+    initiativeId: "init-growth",
+    okrId: "okr-growth-1",
+    milestoneId: "ms-growth-1",
     output: "Folder GDrive isi Logo Final + Pitch Deck PDF",
     strikes: 0,
     subtasks: [
@@ -87,6 +176,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-10",
     due: "2026-01-14", // Deadline Rabu (Masih Aman)
     status: "todo",
+    initiativeId: "init-finance",
+    okrId: "okr-fin-1",
+    milestoneId: "ms-fin-1",
     output: "File Excel Cashflow + List kebutuhan pembelian",
     strikes: 0,
     subtasks: [
@@ -113,6 +205,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-09",
     due: "2026-01-11", // Deadline hari ini (tapi udah kelar)
     status: "done", // SUDAH SELESAI
+    initiativeId: "init-mvp",
+    okrId: "okr-mvp-1",
+    milestoneId: "ms-mvp-1",
     output: "Website bisa diakses localhost/deploy",
     strikes: 0,
     subtasks: [
@@ -142,6 +237,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-09",
     due: "2026-01-13", // Deadline Selasa (Masih Aman)
     status: "doing",
+    initiativeId: "init-mvp",
+    okrId: "okr-mvp-1",
+    milestoneId: "ms-mvp-1",
     output: "Login page jalan + Dashboard rapi sesuai desain",
     strikes: 0,
     subtasks: [
@@ -176,6 +274,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-10",
     due: "2026-01-12", // Deadline Senin (Besok)
     status: "todo", // Belum jalan, rencana besok
+    initiativeId: "init-growth",
+    okrId: "okr-growth-1",
+    milestoneId: "ms-growth-1",
     output: "Foto dokumentasi visit + Hasil interview 2 orang",
     strikes: 0,
     subtasks: [
@@ -197,6 +298,9 @@ export const INITIAL_TASKS: Task[] = [
     start: "2026-01-10",
     due: "2026-01-14", // Deadline Rabu
     status: "doing",
+    initiativeId: "init-growth",
+    okrId: "okr-growth-1",
+    milestoneId: "ms-growth-1",
     output: "1 Video Reels/TikTok (Teaser) siap upload",
     strikes: 0,
     subtasks: [

@@ -8,10 +8,11 @@ import {
   Subtask,
   HistoryLog,
 } from "@/lib/types";
-import { DIVISIONS, PEOPLE } from "@/lib/data";
+import { DIVISIONS, PEOPLE, INITIATIVES, OKRS, MILESTONES } from "@/lib/data";
 import { todayISO, STATUS_CONFIG, formatDate } from "@/lib/utils";
 import { useDialog } from "@/components/ui/DialogProvider";
 import { usePermission } from "@/hooks/usePermission";
+import { stripMetaHistory, upsertTaskMeta } from "@/lib/taskMeta";
 import {
   Check,
   Plus,
@@ -89,8 +90,23 @@ export function TaskForm({
       output: "",
       subtasks: [],
       history: [],
+      initiativeId: null,
+      okrId: null,
+      milestoneId: null,
     },
   );
+
+  const initiativeOptions = INITIATIVES;
+  const okrOptions = useMemo(() => {
+    if (!formData.initiativeId) return [];
+    return OKRS.filter((okr) => okr.initiativeId === formData.initiativeId);
+  }, [formData.initiativeId]);
+  const milestoneOptions = useMemo(() => {
+    if (!formData.initiativeId) return [];
+    return MILESTONES.filter(
+      (milestone) => milestone.initiativeId === formData.initiativeId,
+    );
+  }, [formData.initiativeId]);
 
   // --- LOGIKA WORKLOAD ---
   const workloadByPerson = useMemo(() => {
@@ -127,6 +143,10 @@ export function TaskForm({
   const selectedWorkload = formData.pic
     ? workloadByPerson[formData.pic]
     : undefined;
+  const displayHistory = useMemo(
+    () => stripMetaHistory(formData.history),
+    [formData.history],
+  );
 
   // --- HANDLERS ---
   const toggleMember = (person: string) => {
@@ -221,8 +241,8 @@ export function TaskForm({
       return;
     }
 
-    const newHistory: HistoryLog[] = [...(formData.history || [])];
     const timestamp = new Date().toISOString();
+    const newHistory: HistoryLog[] = stripMetaHistory(formData.history);
 
     if (isDateChanged && initialData) {
       newHistory.unshift({
@@ -268,7 +288,19 @@ export function TaskForm({
       output: formData.output || "",
       strikes: formData.strikes || 0,
       subtasks: formData.subtasks || [],
-      history: newHistory,
+      history: upsertTaskMeta(
+        newHistory,
+        {
+          initiativeId: formData.initiativeId ?? null,
+          okrId: formData.okrId ?? null,
+          milestoneId: formData.milestoneId ?? null,
+        },
+        defaultOwner,
+        timestamp,
+      ),
+      initiativeId: formData.initiativeId ?? null,
+      okrId: formData.okrId ?? null,
+      milestoneId: formData.milestoneId ?? null,
     };
 
     onSave(finalTask);
@@ -452,6 +484,107 @@ export function TaskForm({
             </div>
           </div>
 
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Strategic Link
+                </p>
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                  Project • OKR • Milestone
+                </p>
+              </div>
+              <span className="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
+                Optional
+              </span>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  Initiative
+                </label>
+                <select
+                  disabled={!canEditCore}
+                  value={formData.initiativeId ?? ""}
+                  onChange={(e) => {
+                    const nextId = e.target.value || null;
+                    setFormData((prev) => {
+                      if (prev.initiativeId === nextId) return prev;
+                      return {
+                        ...prev,
+                        initiativeId: nextId,
+                        okrId: null,
+                        milestoneId: null,
+                      };
+                    });
+                  }}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-600 dark:text-white disabled:opacity-50"
+                >
+                  <option value="">Tidak terhubung</option>
+                  {initiativeOptions.map((initiative) => (
+                    <option key={initiative.id} value={initiative.id}>
+                      {initiative.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  OKR
+                </label>
+                <select
+                  disabled={!canEditCore || !formData.initiativeId}
+                  value={formData.okrId ?? ""}
+                  onChange={(e) =>
+                    setFormData({ ...formData, okrId: e.target.value || null })
+                  }
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-600 dark:text-white disabled:opacity-50"
+                >
+                  <option value="">
+                    {formData.initiativeId
+                      ? "Pilih OKR"
+                      : "Pilih initiative dulu"}
+                  </option>
+                  {okrOptions.map((okr) => (
+                    <option key={okr.id} value={okr.id}>
+                      {okr.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  Milestone
+                </label>
+                <select
+                  disabled={!canEditCore || !formData.initiativeId}
+                  value={formData.milestoneId ?? ""}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      milestoneId: e.target.value || null,
+                    })
+                  }
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:bg-slate-800 dark:border-slate-600 dark:text-white disabled:opacity-50"
+                >
+                  <option value="">
+                    {formData.initiativeId
+                      ? "Pilih milestone"
+                      : "Pilih initiative dulu"}
+                  </option>
+                  {milestoneOptions.map((milestone) => (
+                    <option key={milestone.id} value={milestone.id}>
+                      {milestone.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+              Hubungkan task ke initiative supaya progress bisnis terlihat jelas.
+            </p>
+          </div>
+
           <div>
             <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
               Checklist
@@ -632,8 +765,8 @@ export function TaskForm({
         <div
           className={`space-y-4 ${activeTab === "history" ? "block" : "hidden"}`}
         >
-          {formData.history && formData.history.length > 0 ? (
-            formData.history.map((log) => (
+          {displayHistory.length > 0 ? (
+            displayHistory.map((log) => (
               <div
                 key={log.id}
                 className="relative pl-4 border-l-2 border-slate-200 dark:border-slate-700 pb-4 last:pb-0"

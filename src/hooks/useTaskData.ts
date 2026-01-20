@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { Task, AppNotification } from "@/lib/types";
 import { todayISO, daysBetween } from "@/lib/utils";
 import { useDialog } from "@/components/ui/DialogProvider";
+import { getTaskMeta } from "@/lib/taskMeta";
 
 const generateId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -45,22 +46,29 @@ type NotificationRow = {
   timestamp: string;
 };
 
-const mapTaskRow = (t: TaskRow): Task => ({
-  id: t.id,
-  title: t.title,
-  division: t.division,
-  pic: t.pic,
-  members: Array.isArray(t.members) ? t.members : [],
-  priority: t.priority,
-  start: t.start_date,
-  due: t.due_date,
-  status: t.status,
-  output: t.output ?? "",
-  strikes: t.strikes ?? 0,
-  subtasks: Array.isArray(t.subtasks) ? t.subtasks : [],
-  history: Array.isArray(t.history) ? t.history : [],
-  finished_at: t.finished_at ?? null,
-});
+const mapTaskRow = (t: TaskRow): Task => {
+  const history = Array.isArray(t.history) ? t.history : [];
+  const meta = getTaskMeta(history);
+  return {
+    id: t.id,
+    title: t.title,
+    division: t.division,
+    pic: t.pic,
+    members: Array.isArray(t.members) ? t.members : [],
+    priority: t.priority,
+    start: t.start_date,
+    due: t.due_date,
+    status: t.status,
+    output: t.output ?? "",
+    strikes: t.strikes ?? 0,
+    subtasks: Array.isArray(t.subtasks) ? t.subtasks : [],
+    history,
+    finished_at: t.finished_at ?? null,
+    initiativeId: meta.initiativeId ?? null,
+    okrId: meta.okrId ?? null,
+    milestoneId: meta.milestoneId ?? null,
+  };
+};
 
 const mapNotificationRow = (n: NotificationRow): AppNotification => ({
   id: n.id,

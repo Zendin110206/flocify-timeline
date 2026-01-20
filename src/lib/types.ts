@@ -33,6 +33,18 @@ export type AppNotification = {
   relatedFinanceId?: string;
 };
 
+export type Announcement = {
+  id: string;
+  title: string;
+  message: string;
+  tone: NotificationType;
+  is_active: boolean;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  created_at: string;
+  created_by: string;
+};
+
 export type Task = {
   id: string;
   title: string;
@@ -48,6 +60,9 @@ export type Task = {
   subtasks: Subtask[];
   history: HistoryLog[];
   finished_at?: string | null;
+  initiativeId?: string | null;
+  okrId?: string | null;
+  milestoneId?: string | null;
 };
 
 export type Tab =
@@ -58,6 +73,43 @@ export type Tab =
   | "overdue"
   | "performance"
   | "requests";
+
+// --- BAGIAN STRATEGY (PROJECT / OKR / MILESTONE) ---
+export type InitiativeStatus = "on_track" | "at_risk" | "off_track";
+
+export type Initiative = {
+  id: string;
+  title: string;
+  owner: string;
+  start: string;
+  due: string;
+  status: InitiativeStatus;
+  summary?: string;
+};
+
+export type OKR = {
+  id: string;
+  initiativeId: string;
+  title: string;
+  owner: string;
+  target: string;
+};
+
+export type MilestoneStatus = "planned" | "in_progress" | "done";
+
+export type Milestone = {
+  id: string;
+  initiativeId: string;
+  title: string;
+  due: string;
+  status: MilestoneStatus;
+};
+
+export type TaskMeta = {
+  initiativeId?: string | null;
+  okrId?: string | null;
+  milestoneId?: string | null;
+};
 
 // --- BAGIAN FINANCE (BARU - DITAMBAHKAN) ---
 

@@ -8,12 +8,15 @@ import { supabase } from "@/lib/supabase";
 import {
   INITIAL_TASKS,
   INITIAL_NOTIFICATIONS,
+  ADMINS,
   REVIEW_APPROVERS,
   SUPER_ADMIN,
 } from "@/lib/data";
+import { upsertTaskMeta } from "@/lib/taskMeta";
 
 // Hooks Baru
 import { useTaskData } from "@/hooks/useTaskData";
+import { useAnnouncements } from "@/hooks/useAnnouncements";
 
 // Components
 import { Navbar } from "@/components/layout/Navbar";
@@ -27,6 +30,7 @@ import { GanttView } from "@/components/features/GanttView";
 import { PerformanceTable } from "@/components/features/PerformanceTable";
 import { RequestInbox, RequestItem } from "@/components/features/RequestInbox";
 import { TaskForm } from "@/components/features/TaskForm";
+import { AnnouncementsPanel } from "@/components/features/AnnouncementsPanel";
 import { useDialog } from "@/components/ui/DialogProvider";
 
 // Helpers Sederhana
@@ -47,6 +51,7 @@ const parseRequestDetail = (detail: string) => {
 };
 const TASK_TAG_REGEX = /\s*\[task:([^\]]+)\]/;
 const FINANCE_TAG_REGEX = /\s*\[finance:([^\]]+)\]/;
+const ANNOUNCE_TAG_REGEX = /\s*\[announce\]/;
 const extractTaskTag = (message: string) => {
   const match = message.match(TASK_TAG_REGEX);
   return match ? match[1] : null;
@@ -56,7 +61,11 @@ const extractFinanceTag = (message: string) => {
   return match ? match[1] : null;
 };
 const stripNotificationTags = (message: string) =>
-  message.replace(TASK_TAG_REGEX, "").replace(FINANCE_TAG_REGEX, "").trim();
+  message
+    .replace(TASK_TAG_REGEX, "")
+    .replace(FINANCE_TAG_REGEX, "")
+    .replace(ANNOUNCE_TAG_REGEX, "")
+    .trim();
 const buildTaskTag = (taskId: string) => `[task:${taskId}]`;
 
 type TaskPayload = {
@@ -89,6 +98,11 @@ export default function FlocifyDashboard() {
     isLoading,
     refreshData,
   } = useTaskData();
+  const {
+    announcements,
+    isLoading: isAnnouncementsLoading,
+    refreshAnnouncements,
+  } = useAnnouncements();
 
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [me, setMe] = useState("");
@@ -101,6 +115,7 @@ export default function FlocifyDashboard() {
 
   const today = todayISO();
   const isSuperAdmin = me === SUPER_ADMIN;
+  const isAdmin = ADMINS.includes(me);
   const effectiveTab =
     !isSuperAdmin && activeTab === "requests" ? "my" : activeTab;
 
@@ -299,7 +314,16 @@ export default function FlocifyDashboard() {
       output: t.output,
       strikes: t.strikes,
       subtasks: t.subtasks,
-      history: t.history,
+      history: upsertTaskMeta(
+        t.history || [],
+        {
+          initiativeId: t.initiativeId ?? null,
+          okrId: t.okrId ?? null,
+          milestoneId: t.milestoneId ?? null,
+        },
+        t.pic,
+        getTimestamp(),
+      ),
     }));
     const seedNotifs = INITIAL_NOTIFICATIONS.map((n) => ({
       id: n.id,
@@ -570,6 +594,15 @@ export default function FlocifyDashboard() {
         showRequests={isSuperAdmin}
       />
       <main className="mx-auto max-w-7xl px-4 py-6">
+        <div className="mb-6">
+          <AnnouncementsPanel
+            announcements={announcements}
+            isLoading={isAnnouncementsLoading}
+            currentUser={me}
+            isAdmin={isAdmin}
+            onRefresh={refreshAnnouncements}
+          />
+        </div>
         {["my", "all", "timeline", "calendar", "overdue"].includes(
           effectiveTab,
         ) && (

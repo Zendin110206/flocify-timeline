@@ -21,8 +21,9 @@ import {
 import { supabase } from "@/lib/supabase";
 import { Task, HistoryLog } from "@/lib/types";
 import { STATUS_CONFIG, cn, daysBetween, formatDate } from "@/lib/utils";
-import { ADMINS, SUPER_ADMIN } from "@/lib/data";
+import { ADMINS, SUPER_ADMIN, INITIATIVES, OKRS, MILESTONES } from "@/lib/data";
 import { useDialog } from "@/components/ui/DialogProvider";
+import { getTaskMeta, stripMetaHistory } from "@/lib/taskMeta";
 
 type HistoryMeta = {
   icon: React.ElementType;
@@ -103,21 +104,28 @@ const HISTORY_META: Record<string, HistoryMeta> = {
   },
 };
 
-const mapTask = (data: TaskRow): Task => ({
-  id: data.id,
-  title: data.title,
-  division: data.division,
-  pic: data.pic,
-  members: data.members || [],
-  priority: data.priority,
-  start: data.start_date,
-  due: data.due_date,
-  status: data.status,
-  output: data.output || "",
-  strikes: data.strikes || 0,
-  subtasks: data.subtasks || [],
-  history: data.history || [],
-});
+const mapTask = (data: TaskRow): Task => {
+  const history = data.history || [];
+  const meta = getTaskMeta(history);
+  return {
+    id: data.id,
+    title: data.title,
+    division: data.division,
+    pic: data.pic,
+    members: data.members || [],
+    priority: data.priority,
+    start: data.start_date,
+    due: data.due_date,
+    status: data.status,
+    output: data.output || "",
+    strikes: data.strikes || 0,
+    subtasks: data.subtasks || [],
+    history,
+    initiativeId: meta.initiativeId ?? null,
+    okrId: meta.okrId ?? null,
+    milestoneId: meta.milestoneId ?? null,
+  };
+};
 
 const formatDateTime = (value: string) =>
   new Date(value).toLocaleString("id-ID", {
@@ -188,7 +196,7 @@ export default function TaskDetailPage() {
       : Math.round((completedSubtasks / totalSubtasks) * 100);
 
   const sortedHistory = useMemo(() => {
-    return [...(history || [])].sort(
+    return stripMetaHistory(history).sort(
       (a, b) =>
         new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     );
@@ -252,6 +260,14 @@ export default function TaskDetailPage() {
     : !isAssigned
     ? "Hanya PIC atau member yang bisa request perubahan."
     : "Hanya Zaenal yang bisa menyetujui dan mengubah deadline.";
+
+  const initiative = task?.initiativeId
+    ? INITIATIVES.find((item) => item.id === task.initiativeId)
+    : null;
+  const okr = task?.okrId ? OKRS.find((item) => item.id === task.okrId) : null;
+  const milestone = task?.milestoneId
+    ? MILESTONES.find((item) => item.id === task.milestoneId)
+    : null;
 
   const handleAddComment = async () => {
     if (!task) return;
@@ -770,6 +786,30 @@ export default function TaskDetailPage() {
                 </div>
               </div>
               <div className="px-6 py-5 space-y-4 text-sm">
+                {(initiative || okr || milestone) && (
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-xs text-indigo-700 dark:border-indigo-900/40 dark:bg-indigo-900/20 dark:text-indigo-200">
+                    <p className="text-[10px] uppercase tracking-wider">
+                      Strategic Link
+                    </p>
+                    <div className="mt-2 space-y-1">
+                      {initiative && (
+                        <p>
+                          Project: <strong>{initiative.title}</strong>
+                        </p>
+                      )}
+                      {okr && (
+                        <p>
+                          OKR: <strong>{okr.title}</strong>
+                        </p>
+                      )}
+                      {milestone && (
+                        <p>
+                          Milestone: <strong>{milestone.title}</strong>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-slate-500 dark:text-slate-400">PIC</span>
                   <span className="font-semibold text-slate-800 dark:text-slate-100">

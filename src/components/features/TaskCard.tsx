@@ -17,6 +17,11 @@ import Link from "next/link";
 import { Task, TaskStatus } from "@/lib/types";
 import { useDialog } from "@/components/ui/DialogProvider";
 import { usePermission } from "@/hooks/usePermission";
+import { INITIATIVES, OKRS, MILESTONES } from "@/lib/data";
+
+const INITIATIVE_MAP = new Map(INITIATIVES.map((item) => [item.id, item]));
+const OKR_MAP = new Map(OKRS.map((item) => [item.id, item]));
+const MILESTONE_MAP = new Map(MILESTONES.map((item) => [item.id, item]));
 
 interface TaskCardProps {
   task: Task;
@@ -98,6 +103,13 @@ export function TaskCard({
   const statusStyle = getStatusStyle(task.status);
   const StatusIcon = statusStyle.icon;
   const getInitials = (name: string) => name.substring(0, 2).toUpperCase();
+  const initiative = task.initiativeId
+    ? INITIATIVE_MAP.get(task.initiativeId)
+    : null;
+  const okr = task.okrId ? OKR_MAP.get(task.okrId) : null;
+  const milestone = task.milestoneId
+    ? MILESTONE_MAP.get(task.milestoneId)
+    : null;
 
   const handleStatusChange = (nextStatus: TaskStatus) => {
     if (nextStatus === "done" && !allowMarkDone) {
@@ -162,6 +174,35 @@ export function TaskCard({
             {task.title}
           </Link>
         </h3>
+
+        {(initiative || okr || milestone) && (
+          <div className="mb-4 flex flex-wrap gap-2 text-[10px] font-semibold text-slate-500 dark:text-slate-400">
+            {initiative && (
+              <span
+                className="rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300"
+                title={initiative.title}
+              >
+                Project: {initiative.title}
+              </span>
+            )}
+            {okr && (
+              <span
+                className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                title={okr.title}
+              >
+                OKR: {okr.title}
+              </span>
+            )}
+            {milestone && (
+              <span
+                className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                title={milestone.title}
+              >
+                MS: {milestone.title}
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="mb-5 flex items-center justify-between border-b border-slate-50 pb-4 dark:border-slate-800">
           <div className="flex items-center gap-2">
