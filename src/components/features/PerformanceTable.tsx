@@ -1,6 +1,6 @@
 // src/components/features/PerformanceTable.tsx
 import React, { useState, useMemo } from "react";
-import { cn, daysBetween, STATUS_CONFIG } from "@/lib/utils";
+import { cn, daysBetween, formatDate, STATUS_CONFIG } from "@/lib/utils";
 import { Task, HistoryLog } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import {
@@ -57,6 +57,12 @@ const getCompletionTimestamp = (task: Task) => {
   return task.due;
 };
 
+const formatPace = (diffDays: number) => {
+  if (diffDays > 0) return `+${diffDays} d`;
+  if (diffDays < 0) return `${diffDays} d`;
+  return "0 d";
+};
+
 export function PerformanceTable({ tasks }: PerformanceTableProps) {
   const dialog = useDialog();
 
@@ -77,6 +83,7 @@ export function PerformanceTable({ tasks }: PerformanceTableProps) {
     name: string;
     currentStrikes: number;
   } | null>(null);
+  const [expandedMember, setExpandedMember] = useState<string | null>(null);
 
   // --- 1. LOGIKA HITUNG SKOR & STATISTIK ---
   const stats = useMemo(() => {
@@ -108,39 +115,47 @@ export function PerformanceTable({ tasks }: PerformanceTableProps) {
       );
 
       // --- LOGIKA BARU: HITUNG SKOR DETAIL ---
-      let totalScore = 0;
       let totalDaysSaved = 0; // Untuk Avg Pace
-
-      doneTasks.forEach((t) => {
-        // 1. Base Score
-        let taskScore = SCORE_RULES.base[t.priority] || 5;
-
-        // 2. Cari Tanggal Selesai (Pakai kolom finished_at yang baru)
-        // Kalau finished_at kosong (data lama), pakai due date biar adil (skor 0)
+      const completedBreakdown = doneTasks.map((t) => {
+        const baseScore = SCORE_RULES.base[t.priority] || 5;
         const finishedDateISO = getCompletionTimestamp(t);
-
         const diff = daysBetween(finishedDateISO, t.due);
 
+        let speedBonus = 0;
+        let latePenalty = 0;
+
         if (diff > 0) {
-          // Bonus Kecepatan
-          const bonus = Math.min(
+          speedBonus = Math.min(
             diff * SCORE_RULES.speedBonusPerDay,
             SCORE_RULES.maxSpeedBonus,
           );
-          taskScore += bonus;
-          totalDaysSaved += diff;
         } else if (diff < 0) {
-          // Denda Telat
-          const penalty = Math.abs(diff) * SCORE_RULES.latePenaltyPerDay;
-          taskScore -= penalty;
-          totalDaysSaved += diff;
+          latePenalty = Math.abs(diff) * SCORE_RULES.latePenaltyPerDay;
         }
 
-        totalScore += taskScore;
+        totalDaysSaved += diff;
+        const subtotal = baseScore + speedBonus - latePenalty;
+
+        return {
+          id: t.id,
+          title: t.title,
+          priority: t.priority,
+          due: t.due,
+          finishedAt: finishedDateISO,
+          diffDays: diff,
+          baseScore,
+          speedBonus,
+          latePenalty,
+          subtotal,
+        };
       });
 
-      // Kurangi Skor Total dengan Strike yang masih aktif
-      totalScore -= totalStrikes * 15;
+      const scoreFromTasks = completedBreakdown.reduce(
+        (acc, curr) => acc + curr.subtotal,
+        0,
+      );
+      const strikePenalty = totalStrikes * 15;
+      const totalScore = scoreFromTasks - strikePenalty;
 
       // Hitung Avg Pace
       const avgPace =
@@ -177,12 +192,15 @@ export function PerformanceTable({ tasks }: PerformanceTableProps) {
         totalStrikes,
         efficiency,
         score: totalScore,
+        scoreFromTasks,
+        strikePenalty,
         avgPace,
         status,
         statusColor,
         workloadStatus,
         activeCount,
         highPriorityActive,
+        completedBreakdown,
       };
     });
   }, [tasks]);
@@ -401,128 +419,233 @@ export function PerformanceTable({ tasks }: PerformanceTableProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {sortedStats.map((stat, index) => (
-                <tr
-                  key={stat.member}
-                  className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
-                >
-                  <td className="px-6 py-4 text-center">
-                    <span className="text-xs font-black text-slate-400">
-                      #{index + 1}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
-                        {getInitials(stat.member)}
-                      </div>
-                      <span className="font-bold text-slate-700 dark:text-slate-200">
-                        {stat.member}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3 justify-center">
-                      <div className="flex-1 h-2 w-20 bg-slate-100 rounded-full overflow-hidden dark:bg-slate-800 max-w-20">
+              {sortedStats.map((stat, index) => {
+                const isExpanded = expandedMember === stat.member;
+                return (
+                  <React.Fragment key={stat.member}>
+                    <tr className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
+                      <td className="px-6 py-4 text-center">
+                        <span className="text-xs font-black text-slate-400">
+                          #{index + 1}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
+                            {getInitials(stat.member)}
+                          </div>
+                          <span className="font-bold text-slate-700 dark:text-slate-200">
+                            {stat.member}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3 justify-center">
+                          <div className="flex-1 h-2 w-20 bg-slate-100 rounded-full overflow-hidden dark:bg-slate-800 max-w-20">
+                            <div
+                              className={cn(
+                                "h-full rounded-full",
+                                stat.efficiency >= 80
+                                  ? "bg-emerald-500"
+                                  : stat.efficiency >= 50
+                                    ? "bg-blue-500"
+                                    : "bg-amber-500",
+                              )}
+                              style={{ width: `${stat.efficiency}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
+                            {stat.done}/{stat.total}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <div className="inline-flex items-center gap-1 font-black text-sm">
+                          <TrendingUp
+                            size={14}
+                            className={
+                              stat.score < 0
+                                ? "text-rose-500"
+                                : "text-indigo-500"
+                            }
+                          />
+                          <span
+                            className={
+                              stat.score < 0
+                                ? "text-rose-600"
+                                : "text-indigo-600 dark:text-indigo-400"
+                            }
+                          >
+                            {stat.score}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-center">
                         <div
-                          className={cn(
-                            "h-full rounded-full",
-                            stat.efficiency >= 80
-                              ? "bg-emerald-500"
-                              : stat.efficiency >= 50
-                                ? "bg-blue-500"
-                                : "bg-amber-500",
+                          className={`inline-flex items-center gap-1 text-xs font-bold ${parseFloat(stat.avgPace) >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                        >
+                          <Timer size={14} />
+                          {parseFloat(stat.avgPace) > 0 ? "+" : ""}
+                          {stat.avgPace} d
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        {stat.totalStrikes === 0 ? (
+                          <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                            <ShieldCheck size={12} /> CLEAN
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
+                            <AlertOctagon size={12} /> {stat.totalStrikes}{" "}
+                            STRIKE
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {isAdmin && stat.totalStrikes > 0 && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  setSelectedSP({
+                                    name: stat.member,
+                                    count: stat.totalStrikes,
+                                  })
+                                }
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-900/20"
+                                title="Cetak SP"
+                              >
+                                <Printer size={16} />
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setAmnestyTarget({
+                                    name: stat.member,
+                                    currentStrikes: stat.totalStrikes,
+                                  })
+                                }
+                                className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors dark:hover:bg-emerald-900/20"
+                                title="Pengampunan / Reset Strike"
+                              >
+                                <Eraser size={16} />
+                              </button>
+                            </>
                           )}
-                          style={{ width: `${stat.efficiency}%` }}
-                        />
-                      </div>
-                      <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-                        {stat.done}/{stat.total}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="inline-flex items-center gap-1 font-black text-sm">
-                      <TrendingUp
-                        size={14}
-                        className={
-                          stat.score < 0 ? "text-rose-500" : "text-indigo-500"
-                        }
-                      />
-                      <span
-                        className={
-                          stat.score < 0
-                            ? "text-rose-600"
-                            : "text-indigo-600 dark:text-indigo-400"
-                        }
-                      >
-                        {stat.score}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    <div
-                      className={`inline-flex items-center gap-1 text-xs font-bold ${parseFloat(stat.avgPace) >= 0 ? "text-emerald-600" : "text-rose-600"}`}
-                    >
-                      <Timer size={14} />
-                      {parseFloat(stat.avgPace) > 0 ? "+" : ""}
-                      {stat.avgPace} d
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {stat.totalStrikes === 0 ? (
-                      <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
-                        <ShieldCheck size={12} /> CLEAN
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-600 dark:bg-rose-500/10 dark:text-rose-400">
-                        <AlertOctagon size={12} /> {stat.totalStrikes} STRIKE
-                      </div>
+                          <button
+                            onClick={() =>
+                              setExpandedMember(
+                                isExpanded ? null : stat.member,
+                              )
+                            }
+                            className={cn(
+                              "rounded-lg border px-2.5 py-1 text-[10px] font-bold transition-colors",
+                              isExpanded
+                                ? "border-indigo-200 bg-indigo-50 text-indigo-600 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300"
+                                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800",
+                            )}
+                            title="Lihat rincian skor"
+                          >
+                            {isExpanded ? "Tutup" : "Detail"}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="bg-slate-50/70 dark:bg-slate-900/40">
+                        <td colSpan={7} className="px-6 py-4">
+                          <div className="space-y-4">
+                            <div className="grid gap-3 sm:grid-cols-3">
+                              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  Skor Tugas Selesai
+                                </p>
+                                <p className="mt-1 text-lg font-bold text-slate-700 dark:text-slate-100">
+                                  {stat.scoreFromTasks}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  Penalti Strike
+                                </p>
+                                <p className="mt-1 text-lg font-bold text-rose-600 dark:text-rose-400">
+                                  -{stat.strikePenalty}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  Total Skor
+                                </p>
+                                <p className="mt-1 text-lg font-bold text-slate-800 dark:text-slate-100">
+                                  {stat.score}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              {stat.completedBreakdown.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-slate-200 bg-white px-4 py-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                                  Belum ada tugas selesai untuk dihitung.
+                                </div>
+                              ) : (
+                                stat.completedBreakdown.map((task) => (
+                                  <div
+                                    key={task.id}
+                                    className="rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-900"
+                                  >
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <p className="text-sm font-semibold text-slate-700 dark:text-slate-100">
+                                          {task.title}
+                                        </p>
+                                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                          Due {formatDate(task.due)} • Done{" "}
+                                          {formatDate(task.finishedAt)} • Pace{" "}
+                                          <span
+                                            className={cn(
+                                              "font-semibold",
+                                              task.diffDays < 0
+                                                ? "text-rose-600 dark:text-rose-400"
+                                                : task.diffDays > 0
+                                                  ? "text-emerald-600 dark:text-emerald-400"
+                                                  : "text-slate-500 dark:text-slate-400",
+                                            )}
+                                          >
+                                            {formatPace(task.diffDays)}
+                                          </span>
+                                        </p>
+                                        <p className="text-[10px] text-slate-400">
+                                          Base {task.baseScore} • Bonus +
+                                          {task.speedBonus} • Penalty -
+                                          {task.latePenalty}
+                                        </p>
+                                      </div>
+                                      <div className="text-right">
+                                        <p className="text-[10px] uppercase text-slate-400">
+                                          Subtotal
+                                        </p>
+                                        <p
+                                          className={cn(
+                                            "text-sm font-bold",
+                                            task.subtotal < 0
+                                              ? "text-rose-600"
+                                              : "text-indigo-600 dark:text-indigo-400",
+                                          )}
+                                        >
+                                          {task.subtotal}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="px-6 py-4 text-center">
-                    {isAdmin ? (
-                      <div className="flex items-center justify-center gap-2">
-                        {stat.totalStrikes > 0 && (
-                          <>
-                            <button
-                              onClick={() =>
-                                setSelectedSP({
-                                  name: stat.member,
-                                  count: stat.totalStrikes,
-                                })
-                              }
-                              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors dark:hover:bg-rose-900/20"
-                              title="Cetak SP"
-                            >
-                              <Printer size={16} />
-                            </button>
-                            <button
-                              onClick={() =>
-                                setAmnestyTarget({
-                                  name: stat.member,
-                                  currentStrikes: stat.totalStrikes,
-                                })
-                              }
-                              className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors dark:hover:bg-emerald-900/20"
-                              title="Pengampunan / Reset Strike"
-                            >
-                              <Eraser size={16} />
-                            </button>
-                          </>
-                        )}
-                        {stat.totalStrikes === 0 && (
-                          <span className="text-slate-300">-</span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-slate-300 dark:text-slate-700">
-                        -
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
           {sortedStats.length === 0 && (
