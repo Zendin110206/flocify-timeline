@@ -1,6 +1,6 @@
 // src/components/features/PerformanceTable.tsx
 import React, { useState, useMemo } from "react";
-import { cn, daysBetween } from "@/lib/utils";
+import { cn, daysBetween, STATUS_CONFIG } from "@/lib/utils";
 import { Task, HistoryLog } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import {
@@ -35,6 +35,27 @@ const SCORE_RULES = {
 
 const generateId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+const getCompletionTimestamp = (task: Task) => {
+  const history = Array.isArray(task.history) ? task.history : [];
+  const doneLabel = STATUS_CONFIG.done.label;
+  const doneLogs = history.filter(
+    (log) =>
+      log.action === "Completed" ||
+      (log.action === "Status Update" &&
+        log.detail?.trim().endsWith(`-> ${doneLabel}`)),
+  );
+  const latestDone = doneLogs.reduce<string | null>((latest, log) => {
+    if (!log.timestamp) return latest;
+    if (!latest) return log.timestamp;
+    return new Date(log.timestamp) > new Date(latest)
+      ? log.timestamp
+      : latest;
+  }, null);
+  if (latestDone) return latestDone;
+  if (task.finished_at) return task.finished_at;
+  return task.due;
+};
 
 export function PerformanceTable({ tasks }: PerformanceTableProps) {
   const dialog = useDialog();
@@ -96,7 +117,7 @@ export function PerformanceTable({ tasks }: PerformanceTableProps) {
 
         // 2. Cari Tanggal Selesai (Pakai kolom finished_at yang baru)
         // Kalau finished_at kosong (data lama), pakai due date biar adil (skor 0)
-        const finishedDateISO = t.finished_at || t.due;
+        const finishedDateISO = getCompletionTimestamp(t);
 
         const diff = daysBetween(finishedDateISO, t.due);
 
